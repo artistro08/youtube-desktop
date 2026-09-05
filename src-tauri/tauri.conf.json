@@ -19,6 +19,6 @@
     "copyright": "artistro08"
   },
   "build": {
-    "frontendDist": "../dist"
+    "frontendDist": "frontend"
   }
 }
