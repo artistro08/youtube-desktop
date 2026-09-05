@@ -27,14 +27,18 @@ const GDK_BACKEND: &str = "GDK_BACKEND";
 
 use app::{
     invoke::{
-        clear_dock_badge, download_file, increment_dock_badge, send_notification, set_dock_badge,
-        set_dock_badge_label, set_zoom, update_theme_mode, webview_navigate,
+        clear_dock_badge, download_file, get_app_settings, increment_dock_badge,
+        picture_in_picture_opened, save_last_url, send_notification, set_app_setting,
+        set_dock_badge, set_dock_badge_label, set_video_available, set_zoom, update_media_state,
+        update_theme_mode, webview_navigate, youtube_notify,
     },
-    setup::{set_global_shortcut, set_system_tray},
+    settings::AppSettings,
+    setup::{apply_tray_enabled, set_global_shortcut, set_system_tray, TrayRuntime},
     window::{
-        open_additional_window_safe, reapply_window_icon, reveal_built_window, set_window,
-        MultiWindowState,
+        hide_playback, open_additional_window_safe, reapply_window_icon, restore_playback,
+        reveal_built_window, set_window, MultiWindowState,
     },
+    youtube,
 };
 use util::get_pake_config;
 
@@ -197,6 +201,13 @@ pub fn run_app() {
     }
 
     let (pake_config, tauri_config) = get_pake_config();
+
+    // Must happen before any window or notification exists: it is what lets
+    // Windows tie this process to its Start Menu shortcut, and so name and
+    // illustrate the app in the media flyout and taskbar.
+    #[cfg(target_os = "windows")]
+    app::media::set_app_user_model_id(&tauri_config.identifier);
+
     let tauri_app = tauri::Builder::default();
 
     let show_system_tray = pake_config.show_system_tray();
@@ -206,6 +217,7 @@ pub fn run_app() {
     let start_to_tray = pake_config.windows[0].start_to_tray && show_system_tray; // Only valid when tray is enabled
     let multi_instance = pake_config.multi_instance;
     let multi_window = pake_config.multi_window;
+    let tray_icon_path = pake_config.system_tray_path.clone();
     let _enable_find = pake_config.windows[0].enable_find;
     let startup_window_revealed = Arc::new(AtomicBool::new(false));
 
@@ -216,7 +228,13 @@ pub fn run_app() {
             // Prevent flickering on the first open.
             // Exclude FULLSCREEN so a prior --fullscreen build's persisted state
             // doesn't force fullscreen on a rebuild without --fullscreen.
-            StateFlags::all() & !StateFlags::VISIBLE & !StateFlags::FULLSCREEN
+            // Exclude DECORATIONS for the same reason: the app now draws its own
+            // title bar, and a state file written before that would restore the
+            // native one straight over the top of it.
+            StateFlags::all()
+                & !StateFlags::VISIBLE
+                & !StateFlags::FULLSCREEN
+                & !StateFlags::DECORATIONS
         })
         .build();
 
@@ -233,7 +251,20 @@ pub fn run_app() {
     if !multi_instance {
         let instance_revealed = startup_window_revealed.clone();
         app_builder = app_builder.plugin(tauri_plugin_single_instance::init(
-            move |app, _args, _cwd| {
+            move |app, args, _cwd| {
+                // A second launch is how Windows hands a clicked link to an
+                // already-running handler, and how `--tray` brings the tray
+                // icon back after the user turned it off.
+                if args.iter().any(|arg| arg == "--tray") {
+                    apply_tray_enabled(app, true);
+                }
+
+                if let Some(url) = youtube::url_from_args(&args) {
+                    cancel_startup_reveal(&instance_revealed);
+                    youtube::handle_incoming_url(app, &url);
+                    return;
+                }
+
                 if multi_window {
                     open_additional_window_safe(app);
                 } else if let Some(window) = app.get_webview_window("pake") {
@@ -242,6 +273,7 @@ pub fn run_app() {
                     let _ = window.show();
                     reapply_window_icon(&window);
                     let _ = window.set_focus();
+                    restore_playback(app);
                 }
             },
         ));
@@ -287,6 +319,14 @@ pub fn run_app() {
 
     // Clone before setup moves the Arc into tray / shortcut / fallback handlers.
     let close_revealed = startup_window_revealed.clone();
+    // Windows reports minimising as a resize, and repeatedly, so the transition
+    // has to be spotted by comparing against the last state rather than by the
+    // event alone.
+    let was_minimized = Arc::new(AtomicBool::new(false));
+    // Closing to the tray minimises on its way to hiding. That is the app's own
+    // bookkeeping, not the user reaching for the taskbar, and it must not be
+    // answered with the minimise setting on top of the close one.
+    let closing_to_tray = Arc::new(AtomicBool::new(false));
     #[cfg(target_os = "macos")]
     let reopen_revealed = startup_window_revealed.clone();
 
@@ -301,12 +341,52 @@ pub fn run_app() {
             update_theme_mode,
             set_zoom,
             webview_navigate,
+            youtube_notify,
+            get_app_settings,
+            set_app_setting,
+            picture_in_picture_opened,
+            update_media_state,
+            save_last_url,
+            set_video_available,
         ])
         .setup(move |app| {
             app.manage(MultiWindowState::new(
                 pake_config.clone(),
                 tauri_config.clone(),
             ));
+
+            // The tray can be turned off from its own menu, so the build-time
+            // value from pake.json is only the default. `--tray` re-enables it
+            // for a user who cannot click a tray icon that is no longer there.
+            let settings = AppSettings::load(app.app_handle());
+            if std::env::args().any(|arg| arg == "--tray") {
+                settings.set_tray_enabled(true);
+            }
+            let tray_enabled = show_system_tray && settings.tray_enabled();
+            let resume_url = settings
+                .resume_enabled()
+                .then(|| settings.last_url())
+                .flatten();
+            app.manage(settings);
+            app.manage(TrayRuntime {
+                icon_path: tray_icon_path.clone(),
+                init_fullscreen,
+                multi_window,
+                startup_revealed: startup_window_revealed.clone(),
+                video_available: Arc::new(AtomicBool::new(false)),
+            });
+
+            // Claim youtube:// and nothing else — the app is deliberately not a
+            // browser. Registration is per-user and idempotent.
+            #[cfg(target_os = "windows")]
+            match std::env::current_exe() {
+                Ok(executable) => app::windows_registry::register_url_handlers(&executable),
+                Err(error) => {
+                    eprintln!(
+                        "[Pake] Failed to resolve the executable for URL registration: {error}"
+                    )
+                }
+            }
 
             // --- Menu Construction Start ---
             #[cfg(target_os = "macos")]
@@ -320,14 +400,48 @@ pub fn run_app() {
             }
             // --- Menu Construction End ---
 
-            let window = set_window(app.app_handle(), &pake_config, &tauri_config)?;
+            // Cold starts reopen wherever the user left off, unless a link
+            // launched the app: that link is the page they asked for. The
+            // override is applied to a copy, so multi-window clones and any
+            // later rebuild still start from the configured home page.
+            let launch_url = youtube::url_from_args(std::env::args());
+            let mut start_config = pake_config.clone();
+            if launch_url.is_none() {
+                if let Some(resume_url) = resume_url.filter(|url| youtube::is_youtube_url(url)) {
+                    if let Some(window_config) = start_config.windows.first_mut() {
+                        window_config.url = resume_url;
+                    }
+                }
+            }
+
+            let window = set_window(app.app_handle(), &start_config, &tauri_config)?;
+
+            // Publish our own media session so the Windows flyout shows this
+            // app rather than the anonymous WebView2 host process.
+            #[cfg(target_os = "windows")]
+            match app::media::MediaControls::new(&window) {
+                Ok(controls) => {
+                    app.manage(controls);
+                }
+                Err(error) => eprintln!("[Pake] Media transport controls unavailable: {error}"),
+            }
+
+            // A link that launched the app replaces the configured home page.
+            // The window is still hidden here, so it is navigated rather than
+            // shown; the normal page-load reveal keeps startup flash-free.
+            if let Some(url) = launch_url {
+                youtube::apply_launch_url(app.app_handle(), &window, &url);
+            }
+
             set_system_tray(
                 app.app_handle(),
-                show_system_tray,
+                tray_enabled,
                 &pake_config.system_tray_path,
                 init_fullscreen,
                 multi_window,
                 startup_window_revealed.clone(),
+                // Nothing has loaded yet, so there is no video to pop out.
+                false,
             )?;
             set_global_shortcut(
                 app.app_handle(),
@@ -356,10 +470,54 @@ pub fn run_app() {
             Ok(())
         })
         .on_window_event(move |_window, _event| {
+            // Minimising, however it was asked for: the title bar's own button,
+            // the taskbar, or the Windows shortcut. The page cannot see this
+            // itself — with occlusion tracking off so playback survives the
+            // tray, a minimised window still reports itself visible — so the
+            // window is watched here and the page told.
+            if matches!(_event, tauri::WindowEvent::Resized(_)) && _window.label() == "pake" {
+                let minimized = _window.is_minimized().unwrap_or(false);
+                let changed = was_minimized.swap(minimized, Ordering::SeqCst) != minimized;
+
+                if minimized && changed && !closing_to_tray.swap(false, Ordering::SeqCst) {
+                    let app = _window.app_handle();
+                    let wants_pip = app
+                        .try_state::<AppSettings>()
+                        .is_some_and(|settings| settings.pip_on_minimize());
+                    hide_playback(app, wants_pip);
+                } else if !minimized && changed {
+                    // Clearing here as well as on use: closing a window that
+                    // was already minimised leaves the minimise below a no-op,
+                    // so nothing consumes the flag and the next real minimise
+                    // would be skipped instead.
+                    closing_to_tray.store(false, Ordering::SeqCst);
+                    restore_playback(_window.app_handle());
+                }
+            }
+
             if let tauri::WindowEvent::CloseRequested { api, .. } = _event {
-                if hide_on_close && _window.label() == "pake" {
+                // Closing to the tray is only safe while there is a tray to
+                // close to; once the user disables it, close means close.
+                let tray_active = _window
+                    .app_handle()
+                    .try_state::<AppSettings>()
+                    .is_some_and(|settings| settings.tray_enabled());
+
+                if hide_on_close && tray_active && _window.label() == "pake" {
                     // User dismissed the window; do not let startup reveal reopen it.
                     cancel_startup_reveal(&close_revealed);
+
+                    // Settle playback while the window is still up: the hide
+                    // below is the last chance to hand a video to a floating
+                    // window. The minimise on the way there is this handler's
+                    // own doing, so the minimise path is told to sit it out.
+                    let app = _window.app_handle();
+                    let wants_pip = app
+                        .try_state::<AppSettings>()
+                        .is_some_and(|settings| settings.pip_on_close());
+                    closing_to_tray.store(true, Ordering::SeqCst);
+                    hide_playback(app, wants_pip);
+
                     // Hide window when hide_on_close is enabled (regardless of tray status)
                     let window = _window.clone();
                     tauri::async_runtime::spawn(async move {

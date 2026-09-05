@@ -2,8 +2,16 @@
 pub mod auth;
 pub mod config;
 pub mod invoke;
+#[cfg(target_os = "windows")]
+pub mod media;
 #[cfg(target_os = "macos")]
 pub mod menu;
 pub mod navigation;
+#[cfg(target_os = "windows")]
+pub mod pip_window;
+pub mod settings;
 pub mod setup;
 pub mod window;
+#[cfg(target_os = "windows")]
+pub mod windows_registry;
+pub mod youtube;

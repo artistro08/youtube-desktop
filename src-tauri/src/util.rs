@@ -47,6 +47,29 @@ pub fn get_data_dir(app: &AppHandle, package_name: String) -> std::io::Result<Pa
     Ok(data_dir)
 }
 
+/// The longest a page-supplied string may be before it reaches a native API.
+pub const MAX_PAGE_TEXT_CHARS: usize = 200;
+
+/// Bound a string the page handed over.
+///
+/// Toast text, notification bodies and media metadata are all remote page
+/// content on its way into a Windows API that would take an unbounded string
+/// untouched. Counted in characters rather than bytes so a multi-byte title is
+/// not cut mid-sequence, and marked with an ellipsis so the cut is visible
+/// where the string is displayed.
+pub fn truncate_page_text(text: &str) -> String {
+    let trimmed = text.trim();
+    if trimmed.chars().count() <= MAX_PAGE_TEXT_CHARS {
+        return trimmed.to_string();
+    }
+
+    trimmed
+        .chars()
+        .take(MAX_PAGE_TEXT_CHARS)
+        .chain("…".chars())
+        .collect()
+}
+
 pub fn show_toast(window: &WebviewWindow, message: &str) {
     let script = format!(r#"pakeToast("{message}");"#);
     if let Err(error) = window.eval(&script) {

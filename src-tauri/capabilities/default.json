@@ -3,8 +3,22 @@
   "identifier": "pake-capability",
   "description": "Capability for the pake app.",
   "webviews": ["pake"],
+  "_comment": "Remote origins are the ones a session can actually reach, matching the internal_url_regex in pake.json. Upstream Pake grants https://*.*; this app can only navigate to YouTube and the Google hosts a sign-in walks through, so the window and notification permissions below are granted to exactly those.",
   "remote": {
-    "urls": ["https://*.*"]
+    "urls": [
+      "https://youtube.com",
+      "https://*.youtube.com",
+      "https://youtu.be",
+      "https://*.youtu.be",
+      "https://youtube-nocookie.com",
+      "https://*.youtube-nocookie.com",
+      "https://*.ytimg.com",
+      "https://*.googlevideo.com",
+      "https://*.googleusercontent.com",
+      "https://accounts.google.com",
+      "https://myaccount.google.com",
+      "https://payments.google.com"
+    ]
   },
   "permissions": [
     "shell:allow-open",
@@ -15,7 +29,11 @@
     "core:window:allow-set-fullscreen",
     "core:window:allow-set-resizable",
     "core:window:allow-maximize",
+    "core:window:allow-is-maximized",
     "core:window:allow-minimize",
+    "core:window:allow-unminimize",
+    "core:window:allow-show",
+    "core:window:allow-set-focus",
     "core:window:allow-close",
     "core:webview:allow-internal-toggle-devtools",
     "notification:allow-is-permission-granted",

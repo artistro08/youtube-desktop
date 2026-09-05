@@ -973,6 +973,7 @@ document.addEventListener("DOMContentLoaded", () => {
     downloadFile: isChinese ? "下载文件" : "Download File",
     copyAddress: isChinese ? "复制地址" : "Copy Address",
     openInBrowser: isChinese ? "浏览器打开" : "Open in Browser",
+    pictureInPicture: isChinese ? "画中画" : "Picture in picture",
   };
 
   // Menu theme configuration
@@ -1177,6 +1178,9 @@ document.addEventListener("DOMContentLoaded", () => {
         isMedia: true,
         url: target.src || target.currentSrc,
         type: "video",
+        // Kept so the menu can act on this exact video, not a guess at which
+        // one the page considers current.
+        element: target,
       };
     }
 
@@ -1216,6 +1220,24 @@ document.addEventListener("DOMContentLoaded", () => {
           data.type === "image"
             ? menuTexts.downloadImage
             : menuTexts.downloadVideo;
+
+        // Clicking a menu item counts as the user activation Chromium requires
+        // before a page may open picture-in-picture.
+        if (
+          data.type === "video" &&
+          document.pictureInPictureEnabled &&
+          data.element &&
+          !data.element.disablePictureInPicture
+        ) {
+          items.push(
+            createMenuItem(menuTexts.pictureInPicture, () => {
+              data.element.requestPictureInPicture().catch((error) => {
+                console.warn("[Pake] Picture-in-picture was refused:", error);
+              });
+            }),
+          );
+        }
+
         items.push(
           createMenuItem(downloadText, () => downloadImage(data.url)),
           createMenuItem(menuTexts.copyAddress, () =>

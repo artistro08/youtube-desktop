@@ -1,5 +1,24 @@
 # AGENTS.md - Pake Project Knowledge Base
 
+## THIS FORK: YouTube for Windows
+
+This checkout is not generic Pake. It is a YouTube desktop app built on top of
+it, and the app's whole identity — the URL, `internal_url_regex`, window size,
+icons, publisher — lives in three files:
+
+- `src-tauri/pake.json`
+- `src-tauri/tauri.conf.json`
+- `src-tauri/tauri.windows.conf.json`
+
+**The Pake CLI rewrites all three.** `mergeConfig` in `bin/helpers/merge.ts`
+writes them from its own defaults, so running the CLI, or `pnpm test` (which
+sets `PAKE_CREATE_APP=1` and drives it), silently replaces this app's
+configuration with a generic wrapper's. Recovering it means redoing the setup
+by hand.
+
+Build with `npm run build` / `npm run dev`, which call `tauri` directly and
+leave those files alone. If you need the CLI, copy the three files first.
+
 > Project-specific Rust + Tauri rules: `.claude/rules/rust.md`. Skills live under `.agents/skills/` (`/release`, `/bugs`, `/github-ops`, `/code-review`; `.claude/skills/*` are symlinks into `.agents/skills/`, edit the `.agents` copy only). Exception: the `pake` skill's real source is `plugins/pake/skills/pake/SKILL.md` (shipped to users via the Claude Code plugin marketplace, `.claude-plugin/marketplace.json`); `.agents/skills/pake` is a symlink to it.
 
 ## Project Identity

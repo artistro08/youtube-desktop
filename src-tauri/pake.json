@@ -1,13 +1,15 @@
 {
   "windows": [
     {
-      "url": "https://weekly.tw93.fun/en",
+      "url": "https://www.youtube.com",
       "url_type": "web",
       "hide_title_bar": true,
-      "hide_window_decorations": false,
+      "hide_window_decorations": true,
       "fullscreen": false,
-      "width": 1200,
-      "height": 780,
+      "width": 1280,
+      "height": 820,
+      "min_width": 800,
+      "min_height": 600,
       "resizable": true,
       "always_on_top": false,
       "dark_mode": false,
@@ -20,8 +22,8 @@
       "maximize": false,
       "start_to_tray": false,
       "force_internal_navigation": false,
-      "internal_url_regex": "",
-      "enable_find": false,
+      "internal_url_regex": "^https?://([\\w-]+\\.)*(youtube\\.com|youtu\\.be|youtube-nocookie\\.com|ytimg\\.com|googlevideo\\.com|googleusercontent\\.com|accounts\\.google\\.com|myaccount\\.google\\.com|payments\\.google\\.com)(/|$|\\?)",
+      "enable_find": true,
       "new_window": false
     }
   ],
@@ -35,7 +37,7 @@
     "linux": true,
     "windows": true
   },
-  "system_tray_path": "icons/icon.png",
+  "system_tray_path": "",
   "inject": [],
   "proxy_url": "",
   "multi_instance": false,

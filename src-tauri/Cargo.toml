@@ -1,8 +1,8 @@
 [package]
 name = "pake"
-version = "3.15.7"
+version = "0.1.0"
 description = "🤱🏻 Turn any webpage into a desktop app with Rust."
-authors = ["Tw93"]
+authors = ["artistro08"]
 license = "GPL-3.0-or-later"
 repository = "https://github.com/tw93/Pake"
 edition = "2021"
@@ -56,11 +56,29 @@ webkit2gtk = { version = "=2.0.2", features = ["v2_38"] }
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = [
   "Win32_Foundation",
+  "Win32_Graphics_Dwm",
+  "Win32_System_Diagnostics_ToolHelp",
+  "Win32_System_LibraryLoader",
   "Win32_UI_Shell",
   "Win32_UI_WindowsAndMessaging",
 ] }
 # Used for native WebView2 GoBack/GoForward on error pages (no page JS).
 webview2-com = "0.38"
+# Toasts are built directly rather than through tauri-plugin-notification
+# because only the raw toast exposes an activation callback, which is what
+# makes a YouTube notification open its video in the app.
+tauri-winrt-notification = "0.7"
+# URL-handler registration (youtube:// scheme, http(s) capabilities).
+winreg = "0.56"
+# System Media Transport Controls: the app publishes its own media session so
+# the Windows media flyout can name and illustrate it.
+windows = { version = "0.61", features = [
+  "Foundation",
+  "Media",
+  "Storage_Streams",
+  "Win32_Foundation",
+  "Win32_System_WinRT",
+] }
 
 [features]
 # this feature is used for development builds from development cli

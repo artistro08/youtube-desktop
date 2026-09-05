@@ -54,7 +54,7 @@ fn prepare_macos_new_window_configuration(features: &NewWindowFeatures) -> tauri
 fn build_proxy_browser_arg(url: &Url) -> Option<String> {
     let host = url.host_str()?;
     let scheme = url.scheme();
-    let port = url.port().or_else(|| match scheme {
+    let port = url.port().or(match scheme {
         "http" => Some(80),
         "socks5" => Some(1080),
         _ => None,
@@ -208,6 +208,159 @@ fn open_requested_window(
     Ok(window)
 }
 
+/// Run a script in the page as though the user had just clicked something.
+///
+/// Chromium gates a few APIs — picture-in-picture among them — behind a real
+/// user gesture, and a plain eval carries none: it is refused with
+/// NotAllowedError. On Windows the script goes in through the DevTools
+/// protocol instead, which can mark it user-initiated. Everywhere else, and if
+/// that route is unavailable, it falls back to a plain eval, which is enough
+/// for anything not behind the gesture check.
+pub fn eval_with_user_gesture(window: &WebviewWindow, expression: &str) {
+    #[cfg(target_os = "windows")]
+    {
+        use windows::core::{HSTRING, PCWSTR};
+
+        // Built with the JSON serialiser rather than by hand: the expression
+        // ends up inside a JSON string and has to be escaped as one.
+        let parameters = serde_json::json!({
+            "expression": expression,
+            "userGesture": true,
+        })
+        .to_string();
+
+        // The fallback lives inside the closure rather than after it.
+        // `with_webview` reports whether the closure was handed to the event
+        // loop, not whether it worked, so testing its result outside would
+        // call the DevTools route a success even when it failed and leave the
+        // page never hearing about it at all.
+        let fallback = window.clone();
+        let script = expression.to_string();
+
+        let dispatched = window.with_webview(move |webview| unsafe {
+            let failure = match webview.controller().CoreWebView2() {
+                Ok(core) => {
+                    let parameters = HSTRING::from(parameters);
+                    core.CallDevToolsProtocolMethod(
+                        windows::core::w!("Runtime.evaluate"),
+                        PCWSTR(parameters.as_ptr()),
+                        None,
+                    )
+                    .err()
+                    .map(|error| error.to_string())
+                }
+                Err(error) => Some(error.to_string()),
+            };
+
+            let Some(failure) = failure else {
+                return;
+            };
+
+            // Everything except a gesture-gated API still works this way, so a
+            // degraded run beats no run.
+            eprintln!("[Pake] Falling back to a plain eval ({failure}).");
+            if let Err(error) = fallback.eval(&script) {
+                eprintln!("[Pake] Failed to run '{script}': {error}");
+            }
+        });
+
+        if dispatched.is_ok() {
+            return;
+        }
+    }
+
+    if let Err(error) = window.eval(expression) {
+        eprintln!("[Pake] Failed to run '{expression}': {error}");
+    }
+}
+
+/// Settle the page's playback because the window is about to go out of sight.
+///
+/// Every route to a hidden window comes through here — the title bar's own
+/// buttons, the taskbar, Alt+F4, the tray — so picture-in-picture and pausing
+/// behave the same however the window was dismissed. The page decides what to
+/// act on; this only says whether picture-in-picture was asked for.
+pub fn hide_playback(app: &AppHandle, wants_picture_in_picture: bool) {
+    let Some(window) = app.get_webview_window("pake") else {
+        return;
+    };
+
+    // The settings travel with the call rather than being cached in the page.
+    // A cache there starts empty and fills asynchronously, so a window hidden
+    // in the first moments after a page load would read a missing value — and
+    // "pause a playing Short" defaults to on, so the miss would fail the wrong
+    // way. The app holds the values already; passing them costs nothing.
+    let settings = app.try_state::<crate::app::settings::AppSettings>();
+    let pause_shorts = settings
+        .as_ref()
+        .is_some_and(|settings| settings.pause_shorts());
+    let pip_on_shorts = settings
+        .as_ref()
+        .is_some_and(|settings| settings.pip_on_shorts());
+
+    eval_with_user_gesture(
+        &window,
+        &format!(
+            "window.__pakeHidePlayback?.({{ pictureInPicture: {wants_picture_in_picture}, \
+             pauseShorts: {pause_shorts}, shortsMayPopOut: {pip_on_shorts} }})"
+        ),
+    );
+}
+
+/// Take a floating video back into the page, because the window is visible
+/// again.
+///
+/// The mirror of `hide_playback`, and hooked to the same set of routes: the
+/// tray, the taskbar, and the title bar's own controls.
+pub fn restore_playback(app: &AppHandle) {
+    let Some(window) = app.get_webview_window("pake") else {
+        return;
+    };
+
+    eval_with_user_gesture(&window, "window.__pakeRestorePlayback?.()");
+}
+
+/// Hand the browser's own keyboard shortcuts back to the page.
+///
+/// WebView2 claims a set of browser accelerators before the page ever sees the
+/// key: Ctrl+Shift+C and F12 open DevTools, Ctrl+F opens the browser's find
+/// bar, Ctrl+R reloads, Ctrl+P prints. That is a browser's contract, not an
+/// app's, and it means a shortcut the page defines for itself never fires —
+/// Ctrl+Shift+C opened DevTools instead of copying the link. Turning them off
+/// leaves the app menu's own accelerators for find, reload and zoom, which do
+/// the same jobs, and text editing keys (Ctrl+C, Ctrl+V, Ctrl+A, Ctrl+Z) are
+/// explicitly not part of this set.
+#[cfg(target_os = "windows")]
+fn disable_browser_accelerator_keys(window: &WebviewWindow) {
+    use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings3;
+    // Brings `cast`, which is how the newer settings interface is reached from
+    // the base one COM hands back.
+    use windows::core::Interface;
+
+    let result = window.with_webview(|webview| unsafe {
+        let controller = webview.controller();
+        let settings = controller
+            .CoreWebView2()
+            .and_then(|core| core.Settings())
+            .and_then(|settings| settings.cast::<ICoreWebView2Settings3>());
+
+        match settings {
+            Ok(settings) => {
+                if let Err(error) = settings.SetAreBrowserAcceleratorKeysEnabled(false) {
+                    eprintln!("[Pake] Failed to release the browser shortcut keys: {error}");
+                }
+            }
+            Err(error) => {
+                eprintln!("[Pake] Browser shortcut keys are not configurable here: {error}");
+            }
+        }
+    });
+
+    if let Err(error) = result {
+        eprintln!("[Pake] Could not reach the webview to release its shortcut keys: {error}");
+    }
+}
+
 /// Open a multi-window clone of the home app. The window is built hidden and
 /// revealed on its first real page load (see `lib.rs` on_page_load) so Cmd+N
 /// does not flash an empty shell the way the main window used to.
@@ -265,6 +418,13 @@ pub fn any_app_window_visible(app: &AppHandle) -> bool {
 /// Hide every webview window (main + multi-window clones). Used by tray Hide
 /// and the activation shortcut so secondary windows are not left on screen.
 pub fn hide_all_app_windows(app: &AppHandle) {
+    // Hiding to the tray is the same dismissal the close button performs, so it
+    // takes the same setting.
+    let wants_picture_in_picture = app
+        .try_state::<crate::app::settings::AppSettings>()
+        .is_some_and(|settings| settings.pip_on_close());
+    hide_playback(app, wants_picture_in_picture);
+
     for window in app.webview_windows().values() {
         let _ = window.hide();
     }
@@ -290,6 +450,10 @@ pub fn show_all_app_windows(app: &AppHandle, init_fullscreen: bool) {
     } else if let Some(any) = windows.values().next() {
         let _ = any.set_focus();
     }
+
+    // The window the video was popped out of is back, so the video belongs in
+    // it again rather than in a floating window on top of it.
+    restore_playback(app);
 }
 
 /// Tray-click / activation-shortcut toggle: hide all if anything is visible,
@@ -514,10 +678,39 @@ fn build_window(
         .initialization_script(include_str!("../inject/style.js"))
         .initialization_script(include_str!("../inject/theme_refresh.js"))
         .initialization_script(include_str!("../inject/auth.js"))
-        .initialization_script(include_str!("../inject/custom.js"));
+        .initialization_script(include_str!("../inject/custom.js"))
+        .initialization_script(include_str!("../inject/titlebar.js"))
+        .initialization_script(include_str!("../inject/youtube.js"));
+
+    // Media playback support on WebView2:
+    // - MediaSessionService and HardwareMediaKeyHandling are switched off on
+    //   purpose. They publish the page's media session to Windows from the
+    //   msedgewebview2.exe process, which has no application identity, so the
+    //   media flyout reads "Unknown app" with no icon. `app/media.rs` publishes
+    //   an owned session instead; leaving Chromium's on would mean two sessions
+    //   competing for the same media keys.
+    // - CalculateNativeWinOcclusion is disabled because Chromium treats a
+    //   hidden or fully covered window as occluded and throttles it; for a tray
+    //   app that is exactly when playback must keep running.
+    // Chromium honours only the last `--enable-features` switch on a command
+    // line, so every enabled feature has to be collected into one list.
+    #[cfg(target_os = "windows")]
+    let mut windows_enabled_features: Vec<&str> = Vec::new();
+
+    // Overlay scrollbars: the thin idle line that widens under the pointer, the
+    // same behaviour Edge has on Windows 11. Chromium already paints the
+    // Fluent style by default; this is the switch that makes it an overlay, so
+    // it also stops reserving a column of layout for itself. It is Chromium's
+    // own chrome://flags/#overlay-scrollbars, not a Pake setting.
+    #[cfg(target_os = "windows")]
+    windows_enabled_features.push("OverlayScrollbar");
 
     #[cfg(target_os = "windows")]
-    let mut windows_browser_args = String::from("--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --disable-blink-features=AutomationControlled");
+    let mut windows_browser_args = String::from(
+        "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,CalculateNativeWinOcclusion,MediaSessionService,HardwareMediaKeyHandling \
+         --disable-blink-features=AutomationControlled \
+         --autoplay-policy=no-user-gesture-required",
+    );
 
     #[cfg(target_os = "linux")]
     let mut linux_browser_args = String::from("--disable-blink-features=AutomationControlled");
@@ -537,7 +730,7 @@ fn build_window(
     if window_config.enable_wasm {
         #[cfg(target_os = "windows")]
         {
-            windows_browser_args.push_str(" --enable-features=SharedArrayBuffer");
+            windows_enabled_features.push("SharedArrayBuffer");
             windows_browser_args.push_str(" --enable-unsafe-webgpu");
         }
 
@@ -617,6 +810,12 @@ fn build_window(
 
         #[cfg(target_os = "windows")]
         {
+            if !windows_enabled_features.is_empty() {
+                windows_browser_args.push_str(&format!(
+                    " --enable-features={}",
+                    windows_enabled_features.join(",")
+                ));
+            }
             window_builder = window_builder.additional_browser_args(&windows_browser_args);
         }
 
@@ -709,6 +908,9 @@ fn build_window(
     window_builder = window_builder.on_navigation(|_| true);
 
     let window = window_builder.build()?;
+
+    #[cfg(target_os = "windows")]
+    disable_browser_accelerator_keys(&window);
 
     // A shared identifier alone leaves each NSWindow in automatic mode.
     // Prefer tabs only for Cmd+N clones so they join the main window's tab

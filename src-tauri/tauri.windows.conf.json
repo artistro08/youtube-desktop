@@ -1,8 +1,8 @@
 {
   "bundle": {
-    "icon": ["png/weekly_256.ico", "png/weekly_32.ico"],
+    "icon": ["png/youtube.ico"],
     "active": true,
-    "resources": ["png/weekly_32.ico"],
+    "resources": ["png/youtube_512.png"],
     "targets": ["msi"],
     "windows": {
       "digestAlgorithm": "sha256",

@@ -1,7 +1,8 @@
 use crate::app::navigation::{history_step, reload_window};
+use crate::app::settings::{AppSettings, StoredSettings};
 use crate::util::{
     check_file_or_append, get_download_message_with_lang, sanitize_download_filename, show_toast,
-    MessageType,
+    truncate_page_text, MessageType,
 };
 use std::fs::File;
 use std::io::Write;
@@ -82,6 +83,13 @@ pub struct NotificationParams {
     title: String,
     body: String,
     icon: String,
+}
+
+#[derive(serde::Deserialize)]
+pub struct YoutubeNotificationParams {
+    title: String,
+    body: String,
+    url: String,
 }
 
 /// Build a Cookie header from the webview session so authenticated downloads
@@ -188,6 +196,134 @@ pub fn send_notification(app: AppHandle, params: NotificationParams) -> Result<(
         .show()
         .map_err(|e| format!("Failed to show notification: {}", e))?;
     Ok(())
+}
+
+/// Show a YouTube notification whose click reopens the app on that item.
+///
+/// Called by the injected notification poller, which runs in the remote page,
+/// so every field is bounded here: text is truncated and the click target must
+/// be a YouTube URL, or the toast would become a way for page script to send
+/// the window anywhere.
+#[command]
+pub fn youtube_notify(app: AppHandle, params: YoutubeNotificationParams) -> Result<(), String> {
+    use crate::app::youtube::{is_youtube_url, show_notification, IncomingNotification};
+
+    let title = truncate_page_text(&params.title);
+    if title.is_empty() {
+        return Err("Notification title must not be empty".to_string());
+    }
+
+    let url = params.url.trim();
+    if !url.is_empty() && !is_youtube_url(url) {
+        return Err(format!(
+            "Refusing to open non-YouTube URL from a notification: {url}"
+        ));
+    }
+
+    show_notification(
+        &app,
+        IncomingNotification {
+            title,
+            body: truncate_page_text(&params.body),
+            url: url.to_string(),
+        },
+    )
+}
+
+/// Remember the page the user is on so the next cold start reopens there.
+///
+/// The page reports its own location as it navigates, so the URL is checked
+/// before it is stored: only a YouTube address may become the app's start page.
+#[command]
+pub fn save_last_url(app: AppHandle, url: String) -> Result<(), String> {
+    if !crate::app::youtube::is_youtube_url(&url) {
+        return Err(format!("Refusing to remember a non-YouTube URL: {url}"));
+    }
+
+    if let Some(settings) = app.try_state::<AppSettings>() {
+        // The page keeps reporting either way; with resuming switched off the
+        // location is simply not written down.
+        if settings.resume_enabled() {
+            settings.set_last_url(url);
+        }
+    }
+
+    Ok(())
+}
+
+/// Report what the page is playing so the Windows media flyout can mirror it.
+///
+/// A no-op on platforms without transport controls, and silently ignored before
+/// the controls exist, because the page starts reporting as soon as it loads.
+#[command]
+#[cfg_attr(not(target_os = "windows"), allow(unused_variables))]
+pub fn update_media_state(app: AppHandle, state: serde_json::Value) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        let state: crate::app::media::MediaState = serde_json::from_value(state)
+            .map_err(|error| format!("Invalid media state: {error}"))?;
+
+        if let Some(controls) = app.try_state::<crate::app::media::MediaControls>() {
+            controls
+                .update(state)
+                .map_err(|error| format!("Failed to update media controls: {error}"))?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Current state of the settings the in-app settings dialog exposes.
+#[command]
+pub fn get_app_settings(app: AppHandle) -> StoredSettings {
+    app.try_state::<AppSettings>()
+        .map(|settings| settings.snapshot())
+        .unwrap_or_default()
+}
+
+/// Report whether the page is showing a video the tray could pop out.
+///
+/// Called by the page whenever that changes, and it drives the tray menu's
+/// picture-in-picture item on and off.
+#[command]
+pub fn set_video_available(app: AppHandle, available: bool) {
+    crate::app::setup::set_video_available(&app, available);
+}
+
+/// The page has just opened a picture-in-picture window.
+///
+/// That window belongs to WebView2 rather than to this app, so it arrives
+/// wearing the runtime's icon; this is the app's cue to go and put its own icon
+/// on it. Takes no arguments and reports nothing back: it is a nudge, and every
+/// route into picture-in-picture — the title bar, the tray, the page's own
+/// right-click menu — goes through the page event that calls it.
+#[command]
+#[cfg_attr(not(target_os = "windows"), allow(unused_variables))]
+pub fn picture_in_picture_opened() {
+    #[cfg(target_os = "windows")]
+    crate::app::pip_window::brand_picture_in_picture_window();
+}
+
+/// Flip one switch in the settings dialog.
+///
+/// One command for every switch rather than one apiece: they are the same
+/// operation on the same record, and the name is validated against the known
+/// set on the way in, so an unknown or malformed one from a compromised page is
+/// an error rather than a silent no-op.
+///
+/// The tray is the exception that has to be named: turning it off removes a
+/// native icon and brings the windows back, so it runs the tray's own routine
+/// rather than only writing the flag.
+#[command]
+pub fn set_app_setting(app: AppHandle, key: String, enabled: bool) -> Result<(), String> {
+    if key == "tray_enabled" {
+        crate::app::setup::apply_tray_enabled(&app, enabled);
+        return Ok(());
+    }
+
+    app.try_state::<AppSettings>()
+        .ok_or("Settings are unavailable")?
+        .set_flag(&key, enabled)
 }
 
 #[command]

@@ -3,7 +3,10 @@
 document.addEventListener("DOMContentLoaded", () => {
   function pakeToast(msg) {
     const m = document.createElement("div");
-    m.innerHTML = msg;
+    // textContent, not innerHTML: YouTube serves `require-trusted-types-for
+    // 'script'`, under which assigning innerHTML throws and the toast never
+    // appears. The message is plain text in every caller anyway.
+    m.textContent = msg;
     m.style.cssText =
       "max-width:60%;min-width: 80px;padding:0 12px;height: 32px;color: rgb(255, 255, 255);line-height: 32px;text-align: center;border-radius: 8px;position: fixed; bottom:24px;right: 28px;z-index: 999999;background: rgba(0, 0, 0,.8);font-size: 13px;";
     document.body.appendChild(m);
