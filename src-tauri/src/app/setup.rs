@@ -120,7 +120,7 @@ pub fn set_video_available(app: &AppHandle, available: bool) {
 
 /// Ask the page to pop the video it is showing out into a floating window.
 ///
-/// Unlike the minimise and close paths this is an explicit request, so it takes
+/// Unlike the minimize and close paths this is an explicit request, so it takes
 /// whatever video the page has rather than only a playing one, and Shorts are
 /// included without the setting having to be on.
 ///

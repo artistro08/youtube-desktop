@@ -51,7 +51,7 @@ a whole feature disappears with no visible error. Build DOM with
 `createElement`, `createElementNS` and `textContent`.
 
 **The page cannot see the window.** `CalculateNativeWinOcclusion` is disabled
-so playback survives being hidden, which means a minimised window still reports
+so playback survives being hidden, which means a minimized window still reports
 itself visible and `visibilitychange` never fires. Window state is watched in
 Rust (`WindowEvent::Resized` plus `is_minimized`) and pushed to the page.
 
@@ -68,7 +68,16 @@ reason — see the comment in `titlebar.js`.
 **Settings live in two halves.** A field means: the struct and its `serde`
 default in `settings.rs`, the accessor, and a row in the dialog in
 `youtube.js`. One command (`set_app_setting`) covers every switch, so no new
-IPC is needed.
+IPC is needed. They are stored under the bundle identifier
+(`%APPDATA%\com.artistro08.youtube\settings.json`), so changing the identifier
+moves the file — `settings.rs` reads the previous directory once for that
+reason.
+
+**Scripts are injected into every frame.** YouTube's live chat is an iframe on
+the watch page, so anything that builds UI or reports state guards with
+`window.top !== window.self`, or the chat panel grows its own title bar and
+reports itself as the page to resume on. The outbound-link handler is the
+deliberate exception: chat messages contain links too.
 
 ## Rust rules
 
@@ -93,3 +102,5 @@ changes now lives in files this fork has deleted.
 GPL-3.0-or-later, inherited from Pake. The output exception covers apps built
 by Pake's standard process, not forks of Pake's own source, so this repository
 is bound by the GPL. Keep `LICENSE` and `LICENSE-EXCEPTION` in place.
+
+

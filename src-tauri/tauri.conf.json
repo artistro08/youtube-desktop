@@ -1,7 +1,8 @@
 {
   "productName": "YouTube",
-  "identifier": "com.pake.youtube",
-  "version": "0.1.0",
+  "mainBinaryName": "youtube",
+  "identifier": "com.artistro08.youtube",
+  "version": "0.1.1",
   "app": {
     "withGlobalTauri": true,
     "trayIcon": {

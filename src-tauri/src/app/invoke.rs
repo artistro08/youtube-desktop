@@ -236,8 +236,10 @@ pub fn youtube_notify(app: AppHandle, params: YoutubeNotificationParams) -> Resu
 /// before it is stored: only a YouTube address may become the app's start page.
 #[command]
 pub fn save_last_url(app: AppHandle, url: String) -> Result<(), String> {
-    if !crate::app::youtube::is_youtube_url(&url) {
-        return Err(format!("Refusing to remember a non-YouTube URL: {url}"));
+    // Resumable, not merely YouTube: the live chat is a youtube.com page, but
+    // reopening on it strands the user in a chat panel with no way out.
+    if !crate::app::youtube::is_resumable_url(&url) {
+        return Err(format!("Refusing to remember {url} as the start page"));
     }
 
     if let Some(settings) = app.try_state::<AppSettings>() {

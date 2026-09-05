@@ -319,13 +319,13 @@ pub fn run_app() {
 
     // Clone before setup moves the Arc into tray / shortcut / fallback handlers.
     let close_revealed = startup_window_revealed.clone();
-    // Windows reports minimising as a resize, and repeatedly, so the transition
+    // Windows reports minimizing as a resize, and repeatedly, so the transition
     // has to be spotted by comparing against the last state rather than by the
     // event alone.
     let was_minimized = Arc::new(AtomicBool::new(false));
-    // Closing to the tray minimises on its way to hiding. That is the app's own
+    // Closing to the tray minimizes on its way to hiding. That is the app's own
     // bookkeeping, not the user reaching for the taskbar, and it must not be
-    // answered with the minimise setting on top of the close one.
+    // answered with the minimize setting on top of the close one.
     let closing_to_tray = Arc::new(AtomicBool::new(false));
     #[cfg(target_os = "macos")]
     let reopen_revealed = startup_window_revealed.clone();
@@ -407,7 +407,10 @@ pub fn run_app() {
             let launch_url = youtube::url_from_args(std::env::args());
             let mut start_config = pake_config.clone();
             if launch_url.is_none() {
-                if let Some(resume_url) = resume_url.filter(|url| youtube::is_youtube_url(url)) {
+                // Checked again on the way out, not just on the way in: a
+                // settings file written by an earlier build may already hold a
+                // live-chat popout, and starting there is a dead end.
+                if let Some(resume_url) = resume_url.filter(|url| youtube::is_resumable_url(url)) {
                     if let Some(window_config) = start_config.windows.first_mut() {
                         window_config.url = resume_url;
                     }
@@ -470,10 +473,10 @@ pub fn run_app() {
             Ok(())
         })
         .on_window_event(move |_window, _event| {
-            // Minimising, however it was asked for: the title bar's own button,
+            // Minimizing, however it was asked for: the title bar's own button,
             // the taskbar, or the Windows shortcut. The page cannot see this
             // itself — with occlusion tracking off so playback survives the
-            // tray, a minimised window still reports itself visible — so the
+            // tray, a minimized window still reports itself visible — so the
             // window is watched here and the page told.
             if matches!(_event, tauri::WindowEvent::Resized(_)) && _window.label() == "pake" {
                 let minimized = _window.is_minimized().unwrap_or(false);
@@ -487,8 +490,8 @@ pub fn run_app() {
                     hide_playback(app, wants_pip);
                 } else if !minimized && changed {
                     // Clearing here as well as on use: closing a window that
-                    // was already minimised leaves the minimise below a no-op,
-                    // so nothing consumes the flag and the next real minimise
+                    // was already minimized leaves the minimize below a no-op,
+                    // so nothing consumes the flag and the next real minimize
                     // would be skipped instead.
                     closing_to_tray.store(false, Ordering::SeqCst);
                     restore_playback(_window.app_handle());
@@ -509,8 +512,8 @@ pub fn run_app() {
 
                     // Settle playback while the window is still up: the hide
                     // below is the last chance to hand a video to a floating
-                    // window. The minimise on the way there is this handler's
-                    // own doing, so the minimise path is told to sit it out.
+                    // window. The minimize on the way there is this handler's
+                    // own doing, so the minimize path is told to sit it out.
                     let app = _window.app_handle();
                     let wants_pip = app
                         .try_state::<AppSettings>()

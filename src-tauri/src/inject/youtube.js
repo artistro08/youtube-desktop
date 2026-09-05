@@ -11,6 +11,9 @@
   const invoke = window.__TAURI__?.core?.invoke;
   if (!invoke) return;
   if (!/(^|\.)youtube\.com$/i.test(window.location.hostname)) return;
+  // Injected into every frame, and YouTube's live chat is an iframe: without
+  // this the chat panel gets its own copy of all of this.
+  if (window.top !== window.self) return;
   if (window.__pakeYoutubeNotifications) return;
   window.__pakeYoutubeNotifications = true;
 
@@ -273,6 +276,9 @@
   const invoke = window.__TAURI__?.core?.invoke;
   if (!invoke) return;
   if (!/(^|\.)youtube\.com$/i.test(window.location.hostname)) return;
+  // Injected into every frame, and YouTube's live chat is an iframe: without
+  // this the chat panel gets its own copy of all of this.
+  if (window.top !== window.self) return;
   if (window.__pakeResumeBridge) return;
   window.__pakeResumeBridge = true;
 
@@ -307,6 +313,9 @@
   const invoke = window.__TAURI__?.core?.invoke;
   if (!invoke) return;
   if (!/(^|\.)youtube\.com$/i.test(window.location.hostname)) return;
+  // Injected into every frame, and YouTube's live chat is an iframe: without
+  // this the chat panel gets its own copy of all of this.
+  if (window.top !== window.self) return;
   if (window.__pakeMediaBridge) return;
   window.__pakeMediaBridge = true;
 
@@ -315,8 +324,30 @@
   const POLL_INTERVAL_MS = 3_000;
   let lastReport = "";
 
+  /// The video these controls speak for.
+  ///
+  /// Not simply the first `<video>` in the document: a watch page keeps several
+  /// around for the sidebar's hover previews, and one of those can sort first
+  /// with no source at all. Reporting that one says "nothing is playing", the
+  /// session goes to Closed, and the media card disappears from the volume
+  /// flyout — which is what picture-in-picture looked like it was breaking, as
+  /// popping out rearranges the player and changes which video leads.
+  ///
+  /// The floating window's video wins outright while there is one, then a
+  /// playing video, then any that has actually loaded something.
   function currentVideo() {
-    return document.querySelector("video");
+    const inPictureInPicture = document.pictureInPictureElement;
+    if (inPictureInPicture instanceof HTMLVideoElement) {
+      return inPictureInPicture;
+    }
+
+    const videos = [...document.querySelectorAll("video")];
+    return (
+      videos.find((video) => !video.paused && !video.ended && video.readyState > 0) ||
+      videos.find((video) => video.readyState > 0 || video.currentSrc) ||
+      videos[0] ||
+      null
+    );
   }
 
   function largestArtwork(metadata) {
@@ -336,7 +367,10 @@
     const metadata = navigator.mediaSession?.metadata;
 
     return {
-      has_media: Boolean(video && video.src),
+      // currentSrc, not src: YouTube feeds the player through MediaSource and
+      // leaves the src attribute empty, so testing src alone reports "nothing
+      // playing" on the very page that is playing.
+      has_media: Boolean(video && (video.currentSrc || video.src || video.readyState > 0)),
       playing: Boolean(video && !video.paused && !video.ended),
       title: metadata?.title || document.title.replace(/ - YouTube$/, ""),
       artist: metadata?.artist || "",
@@ -362,9 +396,15 @@
 
     if (action === "play") video?.play?.();
     else if (action === "pause") video?.pause?.();
-    else if (action === "next")
-      document.querySelector(".ytp-next-button")?.click();
-    else if (action === "previous") {
+    else if (action === "next") {
+      // The player's own button carries playlist and autoplay behaviour, but
+      // it is not always reachable — while the video is in the floating window
+      // the page swaps the control bar out for a placeholder. Falling through
+      // to the end of the video hands YouTube the same job.
+      const next = document.querySelector(".ytp-next-button");
+      if (next) next.click();
+      else if (video?.duration) video.currentTime = video.duration;
+    } else if (action === "previous") {
       const previous = document.querySelector(".ytp-prev-button");
       // Without a previous entry, restart the current item the way a player
       // would rather than doing nothing at all.
@@ -405,6 +445,9 @@
   const invoke = window.__TAURI__?.core?.invoke;
   if (!invoke) return;
   if (!/(^|\.)youtube\.com$/i.test(window.location.hostname)) return;
+  // Injected into every frame, and YouTube's live chat is an iframe: without
+  // this the chat panel gets its own copy of all of this.
+  if (window.top !== window.self) return;
   if (window.__pakeSettingsMenu) return;
   window.__pakeSettingsMenu = true;
 
@@ -417,9 +460,11 @@
   // own gear right above it.
   const ICON_PATH =
     "M3 17v2h6v-2H3zM3 5v2h10V5H3zm10 16v-2h8v-2h-8v-2h-2v6h2zM7 9v2H3v2h4v2h2V9H7zm14 4v-2H11v2h10zm-6-4h2V7h4V5h-4V3h-2v6z";
-  // YouTube's own dialog close glyph, so this dialog dismisses like the rest.
+  // YouTube's own dialog close glyph, copied from the share dialog's button so
+  // this dialog dismisses with the same icon as the rest. It is the rounded,
+  // heavier X of the current icon set, not the thin one YouTube used before.
   const CLOSE_PATH =
-    "m12.71 12 8.15 8.15-.71.71L12 12.71l-8.15 8.15-.71-.71L11.29 12 3.15 3.85l.7-.7L12 11.29l8.15-8.15.71.71L12.71 12z";
+    "M17.293 5.293 12 10.586 6.707 5.293a1 1 0 10-1.414 1.414L10.586 12l-5.293 5.293a1 1 0 001.414 1.414L12 13.414l5.293 5.293a1 1 0 001.414-1.414L13.414 12l5.293-5.293a1 1 0 10-1.414-1.414Z";
   const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
 
   // DOM helpers (Trusted Types safe)
@@ -973,4 +1018,6 @@
 
   watchPopupContainer();
 })();
+
+
 

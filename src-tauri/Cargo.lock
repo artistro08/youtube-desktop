@@ -2563,37 +2563,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "pake"
-version = "0.1.0"
-dependencies = [
- "block2",
- "dispatch",
- "objc2",
- "objc2-app-kit",
- "objc2-foundation",
- "objc2-web-kit",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-global-shortcut",
- "tauri-plugin-http",
- "tauri-plugin-notification",
- "tauri-plugin-oauth",
- "tauri-plugin-opener",
- "tauri-plugin-shell",
- "tauri-plugin-single-instance",
- "tauri-plugin-window-state",
- "tauri-winrt-notification",
- "tokio",
- "webkit2gtk",
- "webview2-com",
- "windows",
- "windows-sys 0.61.2",
- "winreg 0.56.0",
-]
-
-[[package]]
 name = "pango"
 version = "0.18.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5947,6 +5916,37 @@ dependencies = [
  "quote",
  "syn 2.0.117",
  "synstructure",
+]
+
+[[package]]
+name = "youtube"
+version = "0.1.1"
+dependencies = [
+ "block2",
+ "dispatch",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
+ "objc2-web-kit",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-global-shortcut",
+ "tauri-plugin-http",
+ "tauri-plugin-notification",
+ "tauri-plugin-oauth",
+ "tauri-plugin-opener",
+ "tauri-plugin-shell",
+ "tauri-plugin-single-instance",
+ "tauri-plugin-window-state",
+ "tauri-winrt-notification",
+ "tokio",
+ "webkit2gtk",
+ "webview2-com",
+ "windows",
+ "windows-sys 0.61.2",
+ "winreg 0.56.0",
 ]
 
 [[package]]

@@ -45,6 +45,29 @@ pub fn is_youtube_url(url: &str) -> bool {
         .any(|domain| host == *domain || host.ends_with(&format!(".{domain}")))
 }
 
+/// Pages that only make sense inside another page.
+///
+/// The live chat is the one that bites: it is an iframe on the watch page, and
+/// reopening the app on it lands the user in a bare chat panel with no
+/// masthead, no player and no way back to YouTube.
+const POPOUT_PATHS: [&str; 3] = ["/live_chat", "/live_chat_replay", "/embed/"];
+
+/// True when a URL is a whole page a session can sensibly be resumed on.
+pub fn is_resumable_url(url: &str) -> bool {
+    if !is_youtube_url(url) {
+        return false;
+    }
+
+    let Ok(parsed) = Url::parse(url) else {
+        return false;
+    };
+    let path = parsed.path();
+
+    !POPOUT_PATHS
+        .iter()
+        .any(|popout| path == popout.trim_end_matches('/') || path.starts_with(popout))
+}
+
 /// Normalize whatever a launcher handed us into an https URL.
 ///
 /// `youtube://watch?v=ID`, `youtube://www.youtube.com/watch?v=ID`, and a plain
@@ -54,7 +77,7 @@ pub fn is_youtube_url(url: &str) -> bool {
 /// address. Any web page can publish a `youtube://` link, and Windows shows the
 /// consent prompt in this app's name, so a scheme link that named some other
 /// host would let a page launder an arbitrary address through a dialog that
-/// says YouTube on it. Whatever is not recognisable as a YouTube host is
+/// says YouTube on it. Whatever is not recognizable as a YouTube host is
 /// treated as a path on YouTube instead, which is also what makes the short
 /// `youtube://watch?v=ID` form work.
 pub fn normalize_incoming_url(raw: &str) -> Option<String> {
@@ -339,6 +362,31 @@ mod tests {
                 is_youtube_url(&normalized),
                 "{raw} became {normalized}, which would be sent to the browser"
             );
+        }
+    }
+
+    /// The live chat is a youtube.com page, but reopening the app on it lands
+    /// the user in a bare chat panel with no player and no way back.
+    #[test]
+    fn popout_pages_are_not_resumable() {
+        for url in [
+            "https://www.youtube.com/live_chat?v=Op60Oq1pXqU",
+            "https://www.youtube.com/live_chat_replay?continuation=abc",
+            "https://www.youtube.com/embed/CFutHcNqepk",
+        ] {
+            assert!(is_youtube_url(url), "{url} is still a YouTube page");
+            assert!(
+                !is_resumable_url(url),
+                "{url} must not become the start page"
+            );
+        }
+
+        for url in [
+            "https://www.youtube.com/watch?v=Op60Oq1pXqU",
+            "https://www.youtube.com/",
+            "https://www.youtube.com/feed/subscriptions",
+        ] {
+            assert!(is_resumable_url(url), "{url} should be resumable");
         }
     }
 

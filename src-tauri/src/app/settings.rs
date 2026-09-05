@@ -12,6 +12,13 @@ use tauri::{AppHandle, Manager};
 
 const SETTINGS_FILE: &str = "settings.json";
 
+/// Where settings lived before the app took its own bundle identifier.
+///
+/// The config directory is named after the identifier, so renaming it moves the
+/// file and would silently hand every existing install a fresh set of defaults.
+/// Read once from the old place when the new one is empty.
+const PREVIOUS_CONFIG_DIR: &str = "com.pake.youtube";
+
 /// Every switch here is on unless the user turns it off, and an older settings
 /// file missing the field keeps that behaviour.
 fn default_true() -> bool {
@@ -30,7 +37,7 @@ pub struct StoredSettings {
     /// Whether a cold start reopens the last page.
     #[serde(default = "default_true")]
     pub resume_enabled: bool,
-    /// Whether minimising puts a playing video into picture-in-picture.
+    /// Whether minimizing puts a playing video into picture-in-picture.
     #[serde(default = "default_true")]
     pub pip_on_minimize: bool,
     /// Whether closing to the tray does the same.
@@ -65,6 +72,25 @@ impl Default for StoredSettings {
     }
 }
 
+/// Read the settings the app wrote before it was renamed.
+///
+/// Looked for beside the current config directory, so this finds
+/// `%APPDATA%\com.pake.youtube\settings.json` from
+/// `%APPDATA%\com.artistro08.youtube\settings.json` without knowing where
+/// either of them sits. The old file is left in place: reading it is a
+/// courtesy, and deleting a user's data on an upgrade is not.
+fn read_previous_settings(current: &std::path::Path) -> Option<String> {
+    let previous = current
+        .parent()?
+        .parent()?
+        .join(PREVIOUS_CONFIG_DIR)
+        .join(SETTINGS_FILE);
+
+    let raw = std::fs::read_to_string(previous).ok()?;
+    eprintln!("[Pake] Carried settings over from the app's previous identifier.");
+    Some(raw)
+}
+
 /// Managed state holding the user's runtime preferences.
 ///
 /// One lock over the whole record rather than a flag apiece: the settings are
@@ -88,7 +114,11 @@ impl AppSettings {
 
         let stored = file
             .as_ref()
-            .and_then(|path| std::fs::read_to_string(path).ok())
+            .and_then(|path| {
+                std::fs::read_to_string(path)
+                    .ok()
+                    .or_else(|| read_previous_settings(path))
+            })
             .and_then(|raw| match serde_json::from_str::<StoredSettings>(&raw) {
                 Ok(settings) => Some(settings),
                 Err(error) => {
@@ -128,7 +158,7 @@ impl AppSettings {
         if !set(&mut values) {
             return;
         }
-        // Still holding the lock: the serialised copy has to match what the
+        // Still holding the lock: the serialized copy has to match what the
         // next reader sees, and two writers must not race on the same file.
         self.persist(&values);
     }
@@ -224,7 +254,7 @@ impl AppSettings {
         };
 
         let Ok(serialized) = serde_json::to_string_pretty(values) else {
-            eprintln!("[Pake] Settings could not be serialised; they were not saved.");
+            eprintln!("[Pake] Settings could not be serialized; they were not saved.");
             return;
         };
 

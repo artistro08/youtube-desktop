@@ -18,7 +18,7 @@ already ships the WebView2 runtime the app renders with.
 
 ### Window
 
-The title bar **is** YouTube's masthead. The minimise, maximise and close
+The title bar **is** YouTube's masthead. The minimize, maximize and close
 buttons sit at the right end of that same row, drawn the way Windows draws
 them, and the empty space between the search box and the avatar drags the
 window.
@@ -31,7 +31,7 @@ under the pointer, with the page running to the window edge.
 
 ### Picture-in-picture
 
-The video pops out into a floating window when you minimise, when you close to
+The video pops out into a floating window when you minimize, when you close to
 the tray, from the tray menu, and from the video's own right-click menu.
 Bringing the window back takes the video out of the floating window again.
 
@@ -64,13 +64,35 @@ Under the avatar menu, below YouTube's own Settings:
 | --- | --- | --- |
 | Show tray icon | On | Closing the window keeps the app running in the tray. |
 | Continue where you left off | On | Reopens the last page instead of the home feed. |
-| Pause Shorts when hidden | On | Minimising or closing pauses a playing Short. |
-| Picture-in-picture on minimize | On | Minimising pops a playing video out. |
+| Pause Shorts when hidden | On | Minimizing or closing pauses a playing Short. |
+| Picture-in-picture on minimize | On | Minimizing pops a playing video out. |
 | Picture-in-picture on close | On | Closing to the tray does the same. |
 | Include Shorts | Off | Lets Shorts pop out too. |
 
-Stored in `%APPDATA%\com.pake.youtube\settings.json`. Every field has a
+Stored in `%APPDATA%\com.artistro08.youtube\settings.json`. Every field has a
 default, so a file written by an older build keeps working.
+
+## Memory
+
+The window is one site, so most of what Chromium spends memory on to keep a
+browser fast across many tabs is waste here. The app asks for a single
+renderer, folds same-site frames together, turns off the back/forward cache,
+and runs Chromium's low-end device memory profile.
+
+Measured on the same watch page, whole process tree:
+
+| | Processes | Private | Working set |
+| --- | --- | --- | --- |
+| v0.1.0 | 9 | 658 MB | 1032 MB |
+| v0.1.1 | 8 | 608 MB | 937 MB |
+
+Private bytes is the honest figure; working set double counts pages shared
+between the WebView2 processes. What remains is a renderer and a GPU process
+holding a decoded video, which is the floor for playing YouTube at all.
+
+Site isolation is deliberately left on. Turning it off would collapse more
+processes, but it is the boundary between the page and the ad frames it
+embeds, and that is not a memory decision.
 
 ## Building
 
@@ -95,7 +117,7 @@ this project adds is either Rust, or JavaScript injected into that page.
 
 | Path | What lives there |
 | --- | --- |
-| `src-tauri/src/lib.rs` | App setup, window events, the minimise/close playback path |
+| `src-tauri/src/lib.rs` | App setup, window events, the minimize/close playback path |
 | `src-tauri/src/app/window.rs` | Window construction, WebView2 flags, page evaluation |
 | `src-tauri/src/app/setup.rs` | Tray icon and its menu |
 | `src-tauri/src/app/settings.rs` | The settings record and its file |
@@ -111,7 +133,7 @@ Two notes for anyone changing the injected scripts:
 - YouTube sends `require-trusted-types-for 'script'`, so assigning `innerHTML`
   throws and takes the rest of the script with it. Build DOM with
   `createElement` and `textContent`.
-- The page never learns that the window was minimised. Occlusion tracking is
+- The page never learns that the window was minimized. Occlusion tracking is
   deliberately off so playback survives being hidden, which means
   `visibilitychange` never fires; the Rust side watches window events instead.
 
@@ -124,3 +146,5 @@ GPL. See [`LICENSE`](LICENSE) and [`LICENSE-EXCEPTION`](LICENSE-EXCEPTION).
 
 Pake is copyright Tw93 and the Pake contributors. This project is not
 affiliated with YouTube or Google.
+
+

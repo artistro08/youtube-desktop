@@ -1,7 +1,7 @@
 // Integrated title bar.
 //
 // The window is frameless, and YouTube's masthead doubles as the caption: the
-// minimise / maximise / close buttons sit at the right end of that same row,
+// minimize / maximize / close buttons sit at the right end of that same row,
 // full row height, and the empty space around YouTube's own controls drags the
 // window. Everything is built with createElement because YouTube serves
 // `require-trusted-types-for 'script'`, under which innerHTML throws.
@@ -13,6 +13,9 @@
 (function () {
   const tauri = window.__TAURI__;
   if (!tauri?.window) return;
+  // Scripts are injected into every frame, and YouTube's live chat is an
+  // iframe: without this, the chat panel grows its own set of window controls.
+  if (window.top !== window.self) return;
   if (window.__pakeTitleBar) return;
   window.__pakeTitleBar = true;
 
@@ -289,7 +292,7 @@
   /// paused page has nothing worth floating above the desktop, and leaves
   /// Shorts alone unless `shortsMayPopOut` says otherwise — scrolling the
   /// Shorts feed would otherwise throw a clip into a floating window on every
-  /// minimise. Asking for it outright, from the tray or the context menu,
+  /// minimize. Asking for it outright, from the tray or the context menu,
   /// means neither restriction applies.
   ///
   /// Must be called straight from a click, or through the app's
@@ -311,7 +314,7 @@
     }
 
     // "Back to tab" in the floating window's own controls hands the video back
-    // to the page and nothing else, so the app is still minimised or in the
+    // to the page and nothing else, so the app is still minimized or in the
     // tray with the video playing where it cannot be seen. Bring the window
     // back up with it. Chromium reports the floating window being closed
     // outright the same way, so that raises the window too.
@@ -331,7 +334,7 @@
 
   /// Raise the app window from wherever picture-in-picture left it.
   ///
-  /// It may have been minimised or hidden to the tray, and either has to be
+  /// It may have been minimized or hidden to the tray, and either has to be
   /// undone before focusing, so all three run.
   function returnToWindow() {
     appWindow.show().catch(() => {});
@@ -413,7 +416,7 @@
     });
 
     // Neither button settles playback itself. The app watches the window for
-    // that, so minimising from the taskbar or closing with Alt+F4 behaves the
+    // that, so minimizing from the taskbar or closing with Alt+F4 behaves the
     // same as clicking here.
     controls.appendChild(
       button("minimize", GLYPH_MINIMIZE, "Minimize", () => {
@@ -628,3 +631,4 @@
     document.addEventListener("DOMContentLoaded", start, { once: true });
   }
 })();
+
