@@ -295,15 +295,34 @@ pub fn set_video_available(app: AppHandle, available: bool) {
 /// The page has just opened a picture-in-picture window.
 ///
 /// That window belongs to WebView2 rather than to this app, so it arrives
-/// wearing the runtime's icon; this is the app's cue to go and put its own icon
-/// on it. Takes no arguments and reports nothing back: it is a nudge, and every
-/// route into picture-in-picture — the title bar, the tray, the page's own
-/// right-click menu — goes through the page event that calls it.
+/// wearing the runtime's icon and on whichever virtual desktop it was opened
+/// from; this is the app's cue to go and fix both. Reports nothing back: it is a
+/// nudge, and every route into picture-in-picture — the title bar, the tray, the
+/// page's own right-click menu — goes through the page event that calls it.
 #[command]
 #[cfg_attr(not(target_os = "windows"), allow(unused_variables))]
-pub fn picture_in_picture_opened() {
+pub fn picture_in_picture_opened(app: AppHandle) {
     #[cfg(target_os = "windows")]
-    crate::app::pip_window::brand_picture_in_picture_window();
+    {
+        // Defaults to on, matching the stored setting, so a missing settings
+        // record does not quietly change what the window does.
+        let all_desktops = app
+            .try_state::<AppSettings>()
+            .is_none_or(|settings| settings.pip_all_desktops());
+
+        crate::app::pip_window::brand_picture_in_picture_window(all_desktops);
+    }
+}
+
+/// Look for a newer release because the user asked.
+///
+/// The automatic check runs on its own after startup; this is the settings
+/// dialog's button, so it reports back either way rather than staying quiet when
+/// the app is already current. Takes no input from the page — where to look and
+/// which key to trust are both built into the binary.
+#[command]
+pub async fn check_for_updates(app: AppHandle) -> crate::app::update::UpdateStatus {
+    crate::app::update::check(app, true).await
 }
 
 /// Flip one switch in the settings dialog.

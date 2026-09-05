@@ -11,6 +11,9 @@ pub mod navigation;
 pub mod pip_window;
 pub mod settings;
 pub mod setup;
+pub mod update;
+#[cfg(target_os = "windows")]
+pub mod virtual_desktop;
 pub mod window;
 #[cfg(target_os = "windows")]
 pub mod windows_registry;

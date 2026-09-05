@@ -34,7 +34,10 @@ frontend directory to bundle. Nothing in it is ever shown.
 | `src-tauri/src/app/settings.rs` | The settings record, its file, and its defaults |
 | `src-tauri/src/app/youtube.rs` | Link routing, deep links, notifications |
 | `src-tauri/src/app/media.rs` | Windows media transport controls |
-| `src-tauri/src/app/pip_window.rs` | Puts the app's icon on the floating picture-in-picture window, and closes the Edge settings page its gear button opens |
+| `src-tauri/src/app/pip_window.rs` | Puts the app's icon on the floating picture-in-picture window, pins it to every virtual desktop, and closes the Edge settings page its gear button opens |
+| `src-tauri/src/app/virtual_desktop.rs` | The undocumented shell interfaces behind "show on all desktops" |
+| `src-tauri/src/app/update.rs` | Checking GitHub releases for a newer version and installing one |
+| `scripts/release.mjs` | Signed release build plus the `latest.json` the updater reads |
 | `src-tauri/src/inject/titlebar.js` | Integrated title bar, picture-in-picture, playback on hide |
 | `src-tauri/src/inject/youtube.js` | Notification polling, settings dialog, copy shortcut |
 | `src-tauri/pake.json` | Start URL, window size, `internal_url_regex` |
@@ -66,6 +69,29 @@ has to stay enabled or pause silently does nothing while play still works — se
 the browser arguments in `window.rs`. Its settings button is Edge's own and
 cannot be removed by any WebView2 switch; the page it opens is closed instead,
 in `pip_window.rs`.
+
+**"Show on all desktops" rests on undocumented Windows interfaces.**
+`IVirtualDesktopManager` is documented and cannot pin; `IVirtualDesktopPinnedApps`
+can and is not in the SDK. Microsoft has changed its interface ids between
+Windows releases, so `virtual_desktop.rs` fails quietly and says so once — a
+Windows update can cost this setting its effect, and must never cost more than
+that. Verified on build 26300.
+
+## Releasing
+
+Updates are signed. `scripts/release.mjs` builds and writes the `latest.json`
+the app reads; both it and the MSI go on the GitHub release, and the private key
+lives outside the repository:
+
+```powershell
+$env:TAURI_SIGNING_PRIVATE_KEY = "$HOME\.tauri\youtube-desktop.key"
+node scripts/release.mjs
+gh release create vX.Y.Z <msi> <latest.json> --repo artistro08/youtube-desktop
+```
+
+`gh` defaults to the `upstream` remote here, so `--repo` is not optional. Losing
+the private key means no further updates can be signed, and every installed copy
+stops updating.
 
 **`position: fixed` on `ytd-app` breaks YouTube's dialogs.** It makes a
 stacking context, which traps dialogs under the backdrop Polymer appends to

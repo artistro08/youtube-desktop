@@ -47,6 +47,13 @@ pub struct StoredSettings {
     /// into a floating window while scrolling the feed is rarely wanted.
     #[serde(default)]
     pub pip_on_shorts: bool,
+    /// Whether the floating picture-in-picture window follows the user across
+    /// virtual desktops. On by default: a floating video that disappears when
+    /// the user switches desktop is not doing the one job it has. Relies on
+    /// undocumented Windows interfaces, so it can quietly stop working after a
+    /// Windows release — see `app/virtual_desktop.rs`.
+    #[serde(default = "default_true")]
+    pub pip_all_desktops: bool,
     /// Whether hiding the window pauses a Short that is playing. On by
     /// default: a Short left running loops out of sight until the feed moves
     /// on by itself.
@@ -66,6 +73,7 @@ impl Default for StoredSettings {
             pip_on_minimize: true,
             pip_on_close: true,
             pip_on_shorts: false,
+            pip_all_desktops: true,
             pause_shorts: true,
             last_url: None,
         }
@@ -188,6 +196,10 @@ impl AppSettings {
         self.read(|settings| settings.pip_on_shorts)
     }
 
+    pub fn pip_all_desktops(&self) -> bool {
+        self.read(|settings| settings.pip_all_desktops)
+    }
+
     pub fn pause_shorts(&self) -> bool {
         self.read(|settings| settings.pause_shorts)
     }
@@ -204,6 +216,7 @@ impl AppSettings {
             "pip_on_minimize" => |settings| &mut settings.pip_on_minimize,
             "pip_on_close" => |settings| &mut settings.pip_on_close,
             "pip_on_shorts" => |settings| &mut settings.pip_on_shorts,
+            "pip_all_desktops" => |settings| &mut settings.pip_all_desktops,
             "pause_shorts" => |settings| &mut settings.pause_shorts,
             other => return Err(format!("Unknown setting '{other}'")),
         };
@@ -300,6 +313,7 @@ mod tests {
         assert!(settings.pip_on_close);
         assert!(settings.pause_shorts);
         assert!(!settings.pip_on_shorts, "Shorts stay opt-in");
+        assert!(settings.pip_all_desktops);
     }
 
     /// The very first field added is the one most likely to be missing from a

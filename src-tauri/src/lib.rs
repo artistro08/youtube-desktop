@@ -27,7 +27,7 @@ const GDK_BACKEND: &str = "GDK_BACKEND";
 
 use app::{
     invoke::{
-        clear_dock_badge, download_file, get_app_settings, increment_dock_badge,
+        check_for_updates, clear_dock_badge, download_file, get_app_settings, increment_dock_badge,
         picture_in_picture_opened, save_last_url, send_notification, set_app_setting,
         set_dock_badge, set_dock_badge_label, set_video_available, set_zoom, update_media_state,
         update_theme_mode, webview_navigate, youtube_notify,
@@ -208,7 +208,9 @@ pub fn run_app() {
     #[cfg(target_os = "windows")]
     app::media::set_app_user_model_id(&tauri_config.identifier);
 
-    let tauri_app = tauri::Builder::default();
+    let tauri_app = tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build());
 
     let show_system_tray = pake_config.show_system_tray();
     let hide_on_close = pake_config.windows[0].hide_on_close;
@@ -345,6 +347,7 @@ pub fn run_app() {
             get_app_settings,
             set_app_setting,
             picture_in_picture_opened,
+            check_for_updates,
             update_media_state,
             save_last_url,
             set_video_available,
@@ -469,6 +472,10 @@ pub fn run_app() {
                 // Tray/shortcut already hold clones that cancel user-driven toggles.
                 drop(startup_window_revealed);
             }
+
+            // Look for a new release once, a little after the app opens. Says
+            // nothing unless there is one to install.
+            app::update::check_after_startup(app.app_handle());
 
             Ok(())
         })

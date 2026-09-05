@@ -800,6 +800,63 @@
     return { element, key, render };
   }
 
+  /// The row that reports the installed version and looks for a newer one.
+  ///
+  /// Shaped like a setting row rather than styled separately, so it sits in the
+  /// same list without a stylesheet of its own. The app owns everything about
+  /// the check — where to look, which signature to trust, whether to install —
+  /// so all this does is ask and show the answer.
+  function updateCheckRow() {
+    // Nothing is checked until the button is pressed. The app looks once on its
+    // own after startup, and opening this dialog is not a reason to go back to
+    // the network.
+    const hint = el("div", {
+      className: "row-hint",
+      text: "Check whether a newer version is available.",
+    });
+    const button = el("button", { className: "done", text: "Check now" });
+
+    const render = (status) => {
+      if (!status) {
+        hint.textContent = "The installed version could not be read.";
+        return;
+      }
+
+      if (status.error) {
+        hint.textContent = status.error;
+        return;
+      }
+
+      hint.textContent = status.available
+        ? `Version ${status.version} is available. You have ${status.currentVersion}.`
+        : `Version ${status.currentVersion} is the latest.`;
+    };
+
+    const check = () => {
+      button.disabled = true;
+      hint.textContent = "Checking…";
+
+      invoke("check_for_updates")
+        .then(render)
+        .catch((error) => {
+          console.warn("[Pake] Failed to check for updates:", error);
+          hint.textContent = "Could not check for updates.";
+        })
+        .finally(() => {
+          button.disabled = false;
+        });
+    };
+
+    button.addEventListener("click", check);
+
+    const element = el("div", { className: "row" }, [
+      el("div", {}, [el("div", { className: "row-label", text: "Updates" }), hint]),
+      button,
+    ]);
+
+    return { element, check };
+  }
+
   function openDialog() {
     closeDialog();
 
@@ -844,10 +901,18 @@
         hintOn: "Shorts pop out too.",
         hintOff: "Only full videos pop out; Shorts stay in the window.",
       }),
+      settingRow({
+        label: "Show on all desktops",
+        key: "pip_all_desktops",
+        hintOn: "The floating window follows you between virtual desktops.",
+        hintOff: "The floating window stays on the desktop it opened on.",
+      }),
     ];
 
     // Flat list for the settings round trip; the panel below groups them.
     const rows = [...appRows, ...pipRows];
+
+    const updateRow = updateCheckRow();
 
     const done = el("button", { className: "done", text: "Done" });
 
@@ -872,6 +937,8 @@
             el("h3", { text: "Picture in Picture Settings" }),
           ]),
           ...pipRows.map((row) => row.element),
+          el("div", { className: "section" }, [el("h3", { text: "About" })]),
+          updateRow.element,
         ]),
         el("div", { className: "footer" }, [done]),
       ],

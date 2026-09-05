@@ -60,20 +60,27 @@ const SETTINGS_PAGE_PREFIX: &str = "edge://";
 /// per call.
 static SEARCHING: AtomicBool = AtomicBool::new(false);
 
-/// Give the floating picture-in-picture window this app's icon, then keep the
-/// settings page it can open from being seen.
+/// Give the floating picture-in-picture window this app's icon, show it on every
+/// virtual desktop if the user asked for that, then keep the settings page it
+/// can open from being seen.
 ///
 /// Runs on its own thread: the window does not exist yet when
 /// picture-in-picture is requested, and waiting for it on the caller's thread
 /// would stall the window handler that asked. The thread then stays for as long
 /// as the floating window does, because the settings button can be clicked at
 /// any point in between.
-pub fn brand_picture_in_picture_window() {
+///
+/// The pinning setting is read here rather than passed in because this is where
+/// the window handle appears, and it is read once per window: a window that
+/// opens while the setting is off stays on one desktop even if the setting is
+/// turned on underneath it, which matches how the other picture-in-picture
+/// settings behave.
+pub fn brand_picture_in_picture_window(all_desktops: bool) {
     if SEARCHING.swap(true, Ordering::SeqCst) {
         return;
     }
 
-    std::thread::spawn(|| {
+    std::thread::spawn(move || {
         // Resolved once. The browser process that owns both windows is already
         // running by the time picture-in-picture is asked for, and taking a
         // process snapshot on every pass below would cost far more than the
@@ -85,6 +92,11 @@ pub fn brand_picture_in_picture_window() {
 
             if let Some(window) = find_floating_window(&descendants) {
                 apply_app_icon(window);
+
+                if all_desktops {
+                    show_on_every_desktop(window);
+                }
+
                 close_settings_page_until_closed(window, &descendants);
                 break;
             }
@@ -92,6 +104,25 @@ pub fn brand_picture_in_picture_window() {
 
         SEARCHING.store(false, Ordering::SeqCst);
     });
+}
+
+/// Ask the shell to keep the floating window in front across desktop switches.
+///
+/// Retried, because the window being on screen is not the same as the shell
+/// having a view for it: `GetViewForHwnd` fails for a window Chromium has only
+/// just created, and the gap is a frame or two. Best-effort throughout — a
+/// window that stays on one desktop is the behaviour this app had before the
+/// setting existed.
+fn show_on_every_desktop(window: HWND) {
+    use windows::Win32::Foundation::HWND as ComHwnd;
+
+    for _ in 0..ATTEMPTS {
+        if crate::app::virtual_desktop::set_pinned(ComHwnd(window as *mut _), true) {
+            return;
+        }
+
+        std::thread::sleep(ATTEMPT_DELAY);
+    }
 }
 
 /// Close the settings page for as long as the floating window is on screen.
