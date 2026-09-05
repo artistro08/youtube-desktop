@@ -717,16 +717,16 @@ fn build_window(
     // - The back/forward cache keeps whole rendered pages alive in memory after
     //   navigating away, on the chance of going back. That is a browser trade,
     //   and this is not a browser.
-    // - Low-end device mode is Chromium's own memory profile: smaller caches
-    //   and fewer render tiles. Measured at roughly 65MB of private bytes on a
-    //   watch page, and the page still renders and plays identically. It is the
-    //   first thing to drop if scrolling or buffering ever feels worse.
+    // Low-end device mode is deliberately NOT set. It saves around 50MB, but
+    // it also makes Chromium report the machine as memory-constrained, and
+    // YouTube reads that: the watch page swaps its pill-shaped action buttons
+    // for a lighter layout. Memory is not worth changing what the app looks
+    // like.
     #[cfg(target_os = "windows")]
     let mut windows_browser_args = String::from(
         "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,CalculateNativeWinOcclusion,MediaSessionService,HardwareMediaKeyHandling,BackForwardCache \
          --renderer-process-limit=1 \
          --process-per-site \
-         --enable-low-end-device-mode \
          --disable-blink-features=AutomationControlled \
          --autoplay-policy=no-user-gesture-required",
     );

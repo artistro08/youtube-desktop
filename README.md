@@ -76,23 +76,26 @@ default, so a file written by an older build keeps working.
 
 The window is one site, so most of what Chromium spends memory on to keep a
 browser fast across many tabs is waste here. The app asks for a single
-renderer, folds same-site frames together, turns off the back/forward cache,
-and runs Chromium's low-end device memory profile.
+renderer, folds same-site frames together, and turns off the back/forward
+cache, which otherwise keeps whole rendered pages alive after navigating away.
 
 Measured on the same watch page, whole process tree:
 
 | | Processes | Private | Working set |
 | --- | --- | --- | --- |
 | v0.1.0 | 9 | 658 MB | 1032 MB |
-| v0.1.1 | 8 | 608 MB | 937 MB |
+| v0.1.1 | 8 | 605 MB | 920 MB |
 
 Private bytes is the honest figure; working set double counts pages shared
 between the WebView2 processes. What remains is a renderer and a GPU process
 holding a decoded video, which is the floor for playing YouTube at all.
 
-Site isolation is deliberately left on. Turning it off would collapse more
+Two levers are deliberately left alone. Site isolation would collapse more
 processes, but it is the boundary between the page and the ad frames it
-embeds, and that is not a memory decision.
+embeds, and that is not a memory decision. Chromium's low-end device mode
+saves around 50MB more, but it makes the browser report the machine as
+memory-constrained and YouTube reads that: the watch page loses its pill-shaped
+action buttons and their frosted backgrounds.
 
 ## Building
 
