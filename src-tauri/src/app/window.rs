@@ -172,6 +172,59 @@ pub fn reapply_window_icon(window: &WebviewWindow) {
 #[cfg(not(target_os = "windows"))]
 pub fn reapply_window_icon(_window: &WebviewWindow) {}
 
+/// Tell WebView2 to trim its memory footprint while the window is hidden.
+///
+/// `COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW` is Microsoft's own knob for
+/// this exact shape of app: hidden but still running scripts and holding
+/// network connections open, which is what this tray app is doing whenever
+/// playback continues behind a hidden window. Scripts keep running either
+/// way; the only cost is that memory paged out under Low can be briefly
+/// slower to touch again. Nothing resets this automatically, so every hide
+/// is paired with a restore to Normal on show.
+#[cfg(target_os = "windows")]
+fn set_memory_usage_target_level(window: &WebviewWindow, low: bool) {
+    use webview2_com::Microsoft::Web::WebView2::Win32::{
+        ICoreWebView2_19, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW,
+        COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL,
+    };
+    use windows::core::Interface;
+
+    let level = if low {
+        COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW
+    } else {
+        COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL
+    };
+
+    let result = window.with_webview(move |webview| unsafe {
+        let core = match webview.controller().CoreWebView2() {
+            Ok(core) => core,
+            Err(error) => {
+                eprintln!("[Pake] Failed to reach CoreWebView2 for its memory usage target level: {error}");
+                return;
+            }
+        };
+        match core.cast::<ICoreWebView2_19>() {
+            Ok(core) => {
+                if let Err(error) = core.SetMemoryUsageTargetLevel(level) {
+                    eprintln!("[Pake] Failed to set the WebView2 memory usage target level: {error}");
+                }
+            }
+            Err(error) => {
+                eprintln!("[Pake] WebView2 memory usage target level is not available here: {error}");
+            }
+        }
+    });
+
+    if let Err(error) = result {
+        eprintln!(
+            "[Pake] Could not reach the webview to set its memory usage target level: {error}"
+        );
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn set_memory_usage_target_level(_window: &WebviewWindow, _low: bool) {}
+
 struct WindowBuildOptions<'a> {
     label: &'a str,
     url: WebviewUrl,
@@ -427,6 +480,7 @@ pub fn hide_all_app_windows(app: &AppHandle) {
 
     for window in app.webview_windows().values() {
         let _ = window.hide();
+        set_memory_usage_target_level(window, true);
     }
 }
 
@@ -436,6 +490,7 @@ pub fn show_all_app_windows(app: &AppHandle, init_fullscreen: bool) {
     for window in windows.values() {
         let _ = window.unminimize();
         let _ = window.show();
+        set_memory_usage_target_level(window, false);
         reapply_window_icon(window);
         #[cfg(target_os = "linux")]
         if init_fullscreen && !window.is_fullscreen().unwrap_or(false) {
@@ -661,6 +716,12 @@ fn build_window(
     // any script that reads it (e.g. fullscreen polyfill checks for an opt-out
     // flag), and toast must register `window.pakeToast` before Rust code
     // calls show_toast().
+    //
+    // cpu_tamer.js and engine_tamer.js (CY Fung's YouTube CPU Tamer by
+    // AnimationFrame / YouTube JS Engine Tamer, Greasy Fork, MIT) were tried
+    // here and both broke page loads (content stuck on skeleton placeholders,
+    // higher memory) on this YouTube build. Neither is wired in. Files are
+    // kept at src/inject/{cpu_tamer,engine_tamer}.js, unwired.
     window_builder = window_builder.initialization_script(&config_script);
 
     // find.js is opt-in via --enable-find and no-ops at runtime when disabled,
@@ -722,13 +783,35 @@ fn build_window(
     // YouTube reads that: the watch page swaps its pill-shaped action buttons
     // for a lighter layout. Memory is not worth changing what the app looks
     // like.
+    // --optimize-for-size: V8 favors a smaller JS heap over raw throughput
+    // (fewer/smaller generated code caches, more eager garbage collection).
+    // Costs some CPU; this app trades for memory on purpose (see above).
+    //
+    // --scavenger_max_new_space_capacity_mb=8: caps V8's young-generation
+    // heap, forcing more frequent minor GC in exchange for a smaller
+    // resident set. Unverified — seen in an open, unanswered WebView2
+    // Feedback issue, no Microsoft confirmation, no measured win even from
+    // whoever tried it there. Both --js-flags values have to ride in one
+    // quoted token: Chromium keeps only the last --js-flags switch on the
+    // command line, so a second bare --js-flags=... here would silently
+    // replace optimize-for-size instead of adding to it.
+    // ponytail: if pages stutter under memory pressure (heavy comment
+    // sections, live chat), drop the scavenger cap first — optimize-for-size
+    // alone was the verified-safe baseline before this.
+    //
+    // msWebView2Enable{TrackingPrevention,ShoppingFeatures,FamilySafety}:
+    // same family as msWebOOUI/msPdfOOUI/msSmartScreenProtection above —
+    // Edge-integration features this app has no UI to surface and no use
+    // for. An unrecognized name in --disable-features is a silent no-op, so
+    // this carries the same near-zero risk as the three already here.
     #[cfg(target_os = "windows")]
     let mut windows_browser_args = String::from(
-        "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,CalculateNativeWinOcclusion,MediaSessionService,HardwareMediaKeyHandling,BackForwardCache \
+        "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,msWebView2EnableTrackingPrevention,msWebView2EnableShoppingFeatures,msWebView2EnableFamilySafety,CalculateNativeWinOcclusion,MediaSessionService,HardwareMediaKeyHandling,BackForwardCache \
          --renderer-process-limit=1 \
          --process-per-site \
          --disable-blink-features=AutomationControlled \
-         --autoplay-policy=no-user-gesture-required",
+         --autoplay-policy=no-user-gesture-required \
+         --js-flags=\"--optimize-for-size --scavenger_max_new_space_capacity_mb=8\"",
     );
 
     #[cfg(target_os = "linux")]

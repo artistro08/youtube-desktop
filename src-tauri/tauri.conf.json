@@ -2,7 +2,7 @@
   "productName": "YouTube",
   "mainBinaryName": "youtube",
   "identifier": "com.artistro08.youtube",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "app": {
     "withGlobalTauri": true,
     "trayIcon": {
