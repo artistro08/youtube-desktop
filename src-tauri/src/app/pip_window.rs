@@ -1,4 +1,4 @@
-//! Giving the picture-in-picture window the app's own icon.
+//! Tidying up after the picture-in-picture window.
 //!
 //! The floating window belongs to WebView2, not to this app: Chromium creates
 //! it in the `msedgewebview2.exe` browser process, so it arrives on the taskbar
@@ -10,6 +10,17 @@
 //! The window is found rather than handed over: enumerate the visible top-level
 //! windows, keep the ones belonging to a descendant of this process, and skip
 //! this process's own. What is left is the floating window.
+//!
+//! Its settings button is dealt with in the same place and for the same reason.
+//! Edge adds that button to the window on its own account, and clicking it opens
+//! `edge://settings/appearance/browserBehavior` in a browser window — a page
+//! that has no business existing inside an app, and which WebView2 will not let
+//! the host refuse: it is created inside the browser process rather than raised
+//! as a new-window request, so `on_new_window` never sees it. The button itself
+//! cannot be removed; every picture-in-picture feature WebView2 ships was tried
+//! against it (see the browser arguments in `window.rs`). So the page it opens
+//! is closed the moment it appears, which is the difference between a button
+//! that does nothing and a button that strands the user on a blank window.
 
 use std::collections::HashSet;
 use std::os::windows::ffi::OsStrExt;
@@ -22,8 +33,8 @@ use windows_sys::Win32::System::Diagnostics::ToolHelp::{
 };
 use windows_sys::Win32::UI::Shell::ExtractIconExW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetWindowThreadProcessId, IsWindowVisible, SendMessageW, HICON, ICON_BIG,
-    ICON_SMALL, WM_SETICON,
+    EnumWindows, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsWindow,
+    IsWindowVisible, PostMessageW, SendMessageW, HICON, ICON_BIG, ICON_SMALL, WM_CLOSE, WM_SETICON,
 };
 
 /// Tries before giving up on the floating window appearing. Chromium creates it
@@ -31,33 +42,99 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 const ATTEMPTS: u8 = 10;
 const ATTEMPT_DELAY: Duration = Duration::from_millis(200);
 
+/// How often the settings page is looked for while the floating window is up.
+/// Short enough that the page is gone before it has finished drawing, and the
+/// cost is one `EnumWindows` over the desktop's top-level windows.
+///
+/// ponytail: polling, and only while a floating window exists. A window event
+/// hook scoped to the browser process would be event-driven, but it needs a
+/// message loop of its own and this costs microseconds a few times a second.
+const WATCH_INTERVAL: Duration = Duration::from_millis(200);
+
+/// What the settings page's window is called. Edge titles the window after the
+/// address it is showing, and no window this app opens is ever an `edge:` one.
+const SETTINGS_PAGE_PREFIX: &str = "edge://";
+
 /// One hunt at a time. The page reports picture-in-picture opening, and the
 /// page is untrusted, so a compromised one must not be able to start a thread
 /// per call.
 static SEARCHING: AtomicBool = AtomicBool::new(false);
 
-/// Give the floating picture-in-picture window this app's icon.
+/// Give the floating picture-in-picture window this app's icon, then keep the
+/// settings page it can open from being seen.
 ///
 /// Runs on its own thread: the window does not exist yet when
 /// picture-in-picture is requested, and waiting for it on the caller's thread
-/// would stall the window handler that asked.
+/// would stall the window handler that asked. The thread then stays for as long
+/// as the floating window does, because the settings button can be clicked at
+/// any point in between.
 pub fn brand_picture_in_picture_window() {
     if SEARCHING.swap(true, Ordering::SeqCst) {
         return;
     }
 
     std::thread::spawn(|| {
+        // Resolved once. The browser process that owns both windows is already
+        // running by the time picture-in-picture is asked for, and taking a
+        // process snapshot on every pass below would cost far more than the
+        // window scan it is there to support.
+        let descendants = descendant_process_ids();
+
         for _ in 0..ATTEMPTS {
             std::thread::sleep(ATTEMPT_DELAY);
 
-            if let Some(window) = find_child_process_window() {
+            if let Some(window) = find_floating_window(&descendants) {
                 apply_app_icon(window);
+                close_settings_page_until_closed(window, &descendants);
                 break;
             }
         }
 
         SEARCHING.store(false, Ordering::SeqCst);
     });
+}
+
+/// Close the settings page for as long as the floating window is on screen.
+///
+/// The page is recognized by its title rather than by being new, so a window
+/// this app has no opinion about is never closed by accident. A page that has
+/// not been titled yet survives one pass and goes on the next, which is still
+/// faster than it can be read.
+fn close_settings_page_until_closed(floating: HWND, descendants: &HashSet<u32>) {
+    while unsafe { IsWindow(floating) } != FALSE {
+        for window in child_process_windows(descendants) {
+            if window == floating {
+                continue;
+            }
+
+            if window_title(window).starts_with(SETTINGS_PAGE_PREFIX) {
+                // Posted rather than sent: the window belongs to another
+                // process, and `SendMessageW` would block this thread until
+                // that process finished tearing it down.
+                unsafe { PostMessageW(window, WM_CLOSE, 0, 0) };
+            }
+        }
+
+        std::thread::sleep(WATCH_INTERVAL);
+    }
+}
+
+/// A window's caption, or an empty string for a window without one.
+fn window_title(window: HWND) -> String {
+    let length = unsafe { GetWindowTextLengthW(window) };
+    if length <= 0 {
+        return String::new();
+    }
+
+    // One more than the reported length: `GetWindowTextW` writes a terminator
+    // and reports the count without it.
+    let mut buffer = vec![0u16; length as usize + 1];
+    let copied = unsafe { GetWindowTextW(window, buffer.as_mut_ptr(), buffer.len() as i32) };
+    if copied <= 0 {
+        return String::new();
+    }
+
+    String::from_utf16_lossy(&buffer[..copied as usize])
 }
 
 /// Load the app's icon at both sizes and hand them to the window.
@@ -101,20 +178,28 @@ fn apply_app_icon(window: HWND) {
     }
 }
 
-/// The one visible top-level window owned by a descendant of this process.
+/// The floating window, once Chromium has created it.
 ///
 /// This process's own windows are excluded, so on a normal run the only match
 /// is the floating window: the WebView2 processes have no windows of their own
-/// while the page is merely being rendered into this app's window.
-fn find_child_process_window() -> Option<HWND> {
-    let descendants = descendant_process_ids();
+/// while the page is merely being rendered into this app's window. The settings
+/// page is excluded too, in case the user is quick enough to open one before
+/// the icon has been applied.
+fn find_floating_window(descendants: &HashSet<u32>) -> Option<HWND> {
+    child_process_windows(descendants)
+        .into_iter()
+        .find(|window| !window_title(*window).starts_with(SETTINGS_PAGE_PREFIX))
+}
+
+/// Every visible top-level window owned by a descendant of this process.
+fn child_process_windows(descendants: &HashSet<u32>) -> Vec<HWND> {
     if descendants.is_empty() {
-        return None;
+        return Vec::new();
     }
 
-    let mut found: Option<HWND> = None;
+    let mut found: Vec<HWND> = Vec::new();
     let mut search = Search {
-        descendants: &descendants,
+        descendants,
         found: &mut found,
     };
 
@@ -127,7 +212,7 @@ fn find_child_process_window() -> Option<HWND> {
 
 struct Search<'a> {
     descendants: &'a HashSet<u32>,
-    found: &'a mut Option<HWND>,
+    found: &'a mut Vec<HWND>,
 }
 
 unsafe extern "system" fn consider_window(window: HWND, state: LPARAM) -> BOOL {
@@ -140,13 +225,13 @@ unsafe extern "system" fn consider_window(window: HWND, state: LPARAM) -> BOOL {
     let mut owner = 0u32;
     unsafe { GetWindowThreadProcessId(window, &mut owner) };
 
-    if !search.descendants.contains(&owner) {
-        return TRUE;
+    if search.descendants.contains(&owner) {
+        search.found.push(window);
     }
 
-    *search.found = Some(window);
-    // Stop: the first match is the one.
-    FALSE
+    // Carry on: the settings page and the floating window are both wanted, and
+    // which one turns up first is not fixed.
+    TRUE
 }
 
 /// Every process descended from this one, excluding this one.

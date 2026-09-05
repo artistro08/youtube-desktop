@@ -34,7 +34,7 @@ frontend directory to bundle. Nothing in it is ever shown.
 | `src-tauri/src/app/settings.rs` | The settings record, its file, and its defaults |
 | `src-tauri/src/app/youtube.rs` | Link routing, deep links, notifications |
 | `src-tauri/src/app/media.rs` | Windows media transport controls |
-| `src-tauri/src/app/pip_window.rs` | Puts the app's icon on the floating picture-in-picture window |
+| `src-tauri/src/app/pip_window.rs` | Puts the app's icon on the floating picture-in-picture window, and closes the Edge settings page its gear button opens |
 | `src-tauri/src/inject/titlebar.js` | Integrated title bar, picture-in-picture, playback on hide |
 | `src-tauri/src/inject/youtube.js` | Notification polling, settings dialog, copy shortcut |
 | `src-tauri/pake.json` | Start URL, window size, `internal_url_regex` |
@@ -59,6 +59,13 @@ Rust (`WindowEvent::Resized` plus `is_minimized`) and pushed to the page.
 `NotAllowedError`. Anything reaching `requestPictureInPicture` from outside a
 click has to go through `eval_with_user_gesture`, which uses WebView2's
 DevTools protocol with `userGesture: true`.
+
+**The floating window is Chromium's, and it is only half controllable.** Its
+play/pause button routes through the page's media session, so `MediaSessionService`
+has to stay enabled or pause silently does nothing while play still works — see
+the browser arguments in `window.rs`. Its settings button is Edge's own and
+cannot be removed by any WebView2 switch; the page it opens is closed instead,
+in `pip_window.rs`.
 
 **`position: fixed` on `ytd-app` breaks YouTube's dialogs.** It makes a
 stacking context, which traps dialogs under the backdrop Polymer appends to

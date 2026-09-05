@@ -744,15 +744,31 @@ fn build_window(
         .initialization_script(include_str!("../inject/youtube.js"));
 
     // Media playback support on WebView2:
-    // - MediaSessionService and HardwareMediaKeyHandling are switched off on
-    //   purpose. They publish the page's media session to Windows from the
-    //   msedgewebview2.exe process, which has no application identity, so the
-    //   media flyout reads "Unknown app" with no icon. `app/media.rs` publishes
-    //   an owned session instead; leaving Chromium's on would mean two sessions
-    //   competing for the same media keys.
+    // - HardwareMediaKeyHandling is switched off on purpose. It is the single
+    //   gate on Chromium's Windows media integration
+    //   (`MediaKeysListenerManager::IsMediaKeyHandlingEnabled`), which publishes
+    //   the page's session from the msedgewebview2.exe process. That process has
+    //   no application identity, so the media flyout reads "Unknown app" with no
+    //   icon. `app/media.rs` publishes an owned session instead, and leaving
+    //   Chromium's on would mean two sessions competing for the same media keys.
+    // - MediaSessionService must stay ON, even though it sounds like the same
+    //   thing. It is what registers each player with the page's media session,
+    //   and the floating picture-in-picture window's play/pause button routes
+    //   through that session: `PauseInternal` calls `MediaSessionImpl::Suspend`,
+    //   which returns immediately while the session has no players. Disabling it
+    //   left a window whose pause button did nothing while its play button
+    //   worked, because play falls through to the media player directly.
     // - CalculateNativeWinOcclusion is disabled because Chromium treats a
     //   hidden or fully covered window as occluded and throttles it; for a tray
     //   app that is exactly when playback must keep running.
+    // The floating window's settings button is deliberately not listed here.
+    // It is Edge's own addition (`EdgePipSettingsButton`), and none of the five
+    // picture-in-picture features WebView2 ships — msAllowPictureInPicture,
+    // msEdgeBrowserTypePictureInPicture, msEdgePipAdvanced, msEdgePipAlignedUI,
+    // msPictureInPictureMediaSession — removes it; each was tried in turn.
+    // msEdgePipAdvanced comes closest and makes the window worse, dropping the
+    // mute button and doubling "Back to tab". The page that button opens is
+    // shut in `app/pip_window.rs` instead.
     // Chromium honours only the last `--enable-features` switch on a command
     // line, so every enabled feature has to be collected into one list.
     #[cfg(target_os = "windows")]
@@ -783,21 +799,25 @@ fn build_window(
     // YouTube reads that: the watch page swaps its pill-shaped action buttons
     // for a lighter layout. Memory is not worth changing what the app looks
     // like.
-    // --optimize-for-size: V8 favors a smaller JS heap over raw throughput
-    // (fewer/smaller generated code caches, more eager garbage collection).
-    // Costs some CPU; this app trades for memory on purpose (see above).
+    // --optimize-for-size: V8 favours a small JS heap over throughput — fewer
+    // and smaller generated code caches, more eager garbage collection. Kept on
+    // purpose, and it is not free: resizing the window is the one thing this app
+    // does that runs YouTube's layout flat out, and this flag is paid for there.
     //
-    // --scavenger_max_new_space_capacity_mb=8: caps V8's young-generation
-    // heap, forcing more frequent minor GC in exchange for a smaller
-    // resident set. Unverified — seen in an open, unanswered WebView2
-    // Feedback issue, no Microsoft confirmation, no measured win even from
-    // whoever tried it there. Both --js-flags values have to ride in one
-    // quoted token: Chromium keeps only the last --js-flags switch on the
-    // command line, so a second bare --js-flags=... here would silently
-    // replace optimize-for-size instead of adding to it.
-    // ponytail: if pages stutter under memory pressure (heavy comment
-    // sections, live chat), drop the scavenger cap first — optimize-for-size
-    // alone was the verified-safe baseline before this.
+    // Measured over a scripted 120-step width sweep on a watch page, renderer
+    // CPU, three fresh sessions each and compared run for run — a session's
+    // numbers climb as the page accumulates state, so only matched runs mean
+    // anything. With the flag: 3891 / 4875 / 4922 ms. Without it: 3250 / 3625 /
+    // 4422 ms, around a fifth less main-thread work every time, for roughly
+    // 57MB more resident (1153MB against 1096MB). Memory won.
+    //
+    // `--scavenger_max_new_space_capacity_mb=8` used to ride in the same token
+    // and is gone for good. It capped V8's young generation so hard that every
+    // frame of a drag ran a collection, it went in unverified — an open,
+    // unanswered WebView2 Feedback issue with no measured win behind it — and
+    // its own note said to drop it first if pages stuttered. Both values had to
+    // share one quoted token, because Chromium keeps only the last --js-flags
+    // switch on a command line.
     //
     // msWebView2Enable{TrackingPrevention,ShoppingFeatures,FamilySafety}:
     // same family as msWebOOUI/msPdfOOUI/msSmartScreenProtection above —
@@ -806,12 +826,12 @@ fn build_window(
     // this carries the same near-zero risk as the three already here.
     #[cfg(target_os = "windows")]
     let mut windows_browser_args = String::from(
-        "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,msWebView2EnableTrackingPrevention,msWebView2EnableShoppingFeatures,msWebView2EnableFamilySafety,CalculateNativeWinOcclusion,MediaSessionService,HardwareMediaKeyHandling,BackForwardCache \
+        "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,msWebView2EnableTrackingPrevention,msWebView2EnableShoppingFeatures,msWebView2EnableFamilySafety,CalculateNativeWinOcclusion,HardwareMediaKeyHandling,BackForwardCache \
          --renderer-process-limit=1 \
          --process-per-site \
          --disable-blink-features=AutomationControlled \
          --autoplay-policy=no-user-gesture-required \
-         --js-flags=\"--optimize-for-size --scavenger_max_new_space_capacity_mb=8\"",
+         --js-flags=--optimize-for-size",
     );
 
     #[cfg(target_os = "linux")]

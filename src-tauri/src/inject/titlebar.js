@@ -43,6 +43,10 @@
   const FALLBACK_HEIGHT = 32;
   // How long the watch page's bar takes to fade between clear and solid.
   const MASTHEAD_FADE_MS = 300;
+  // How still the window has to be before a drag counts as finished. Long
+  // enough to cover the gap between two frames of a slow drag, short enough
+  // that letting go feels like it settles at once.
+  const SETTLE_MS = 120;
   // Half-second tries at finding YouTube's layout before concluding this page
   // does not have one. Thirty seconds is far longer than a cold load takes.
   const LAYOUT_ATTEMPTS = 60;
@@ -475,11 +479,58 @@
   }
 
   // Layout
+  //
+  // Dragging a window edge fires `resize` many times a second, and the observers
+  // below fire alongside it. Doing the work per event meant reading layout and
+  // writing custom properties over and over within a single frame, and every
+  // read forced a fresh layout that the write before it had just invalidated.
+  // Everything is funnelled through one animation frame instead, which is the
+  // rate the window is repainted at anyway.
+  let syncScheduled = false;
+  // True from the first resize event until the window has been still for
+  // SETTLE_MS. Used to leave the expensive parts alone mid-drag.
+  let resizing = false;
+  let settleTimer = 0;
+
+  function scheduleSync() {
+    if (syncScheduled) return;
+
+    syncScheduled = true;
+    window.requestAnimationFrame(() => {
+      syncScheduled = false;
+      syncMetrics();
+    });
+  }
+
+  /// Note that the window is being dragged, and arrange to notice when it stops.
+  function beginResize() {
+    resizing = true;
+    window.clearTimeout(settleTimer);
+    settleTimer = window.setTimeout(endResize, SETTLE_MS);
+  }
+
+  /// The window has stopped moving: put back everything the drag skipped.
+  function endResize() {
+    resizing = false;
+    syncMaximizeGlyph();
+    scheduleSync();
+  }
+
+  // Last values written, so an unchanged number never dirties the document.
+  // `--pake-titlebar-height` positions and sizes ytd-app, so writing it is a
+  // relayout of the whole page — and during a drag it is the same number every
+  // single frame.
+  const written = new Map();
+
+  function setMetric(name, value) {
+    if (written.get(name) === value) return;
+
+    written.set(name, value);
+    document.documentElement.style.setProperty(name, value);
+  }
+
   function syncMetrics() {
-    document.documentElement.style.setProperty(
-      "--pake-titlebar-height",
-      `${titleBarHeight()}px`,
-    );
+    setMetric("--pake-titlebar-height", `${titleBarHeight()}px`);
 
     syncGlow();
   }
@@ -503,10 +554,19 @@
   let playerObserver = null;
 
   function syncGlow() {
+    const root = document.documentElement;
+
+    // The rule this feeds only matches on a watch page, so anywhere else the
+    // measurement below would be taken and thrown away. Worth checking first:
+    // this runs once a frame for the whole of a resize.
+    if (!root.classList.contains(WATCH_CLASS)) {
+      root.classList.remove(GLOW_CLASS);
+      return;
+    }
+
     const player =
       document.querySelector("#movie_player") ||
       document.querySelector("#player-container");
-    const rect = player?.getBoundingClientRect();
 
     if (player && playerObserver && player !== observedPlayer) {
       if (observedPlayer) playerObserver.unobserve(observedPlayer);
@@ -514,17 +574,28 @@
       observedPlayer = player;
     }
 
-    if (!rect || rect.width === 0) {
-      document.documentElement.classList.remove(GLOW_CLASS);
+    // Mid-drag the glow goes back to being an ordinary part of the page. Lifting
+    // it means pinning a large blurred element to fresh coordinates on every
+    // frame, which is the most expensive thing on this path, and all it buys
+    // during a drag is a bleed above the player that nobody is looking at.
+    // `endResize` puts it back.
+    if (resizing) {
+      root.classList.remove(GLOW_CLASS);
       return;
     }
 
-    const root = document.documentElement.style;
-    root.setProperty("--pake-glow-left", `${rect.left}px`);
-    root.setProperty("--pake-glow-top", `${rect.top}px`);
-    root.setProperty("--pake-glow-width", `${rect.width}px`);
-    root.setProperty("--pake-glow-height", `${rect.height}px`);
-    document.documentElement.classList.add(GLOW_CLASS);
+    const rect = player?.getBoundingClientRect();
+
+    if (!rect || rect.width === 0) {
+      root.classList.remove(GLOW_CLASS);
+      return;
+    }
+
+    setMetric("--pake-glow-left", `${rect.left}px`);
+    setMetric("--pake-glow-top", `${rect.top}px`);
+    setMetric("--pake-glow-width", `${rect.width}px`);
+    setMetric("--pake-glow-height", `${rect.height}px`);
+    root.classList.add(GLOW_CLASS);
   }
 
   function syncWatchPage() {
@@ -549,7 +620,7 @@
   // A video appearing is both a new tray item and a newly sized player.
   function onMediaChange() {
     syncVideoAvailability();
-    syncGlow();
+    scheduleSync();
   }
 
   // YouTube's layout is rendered after the first paint, so neither the row
@@ -572,21 +643,24 @@
     // Separate from the row observer below because the player comes and goes
     // with the page and resizes on its own in theatre mode. Created first so
     // the sync right after picks the player up on the way past.
-    playerObserver = new ResizeObserver(syncGlow);
+    playerObserver = new ResizeObserver(scheduleSync);
 
-    syncMetrics();
     syncWatchPage();
+    syncMetrics();
 
-    // The masthead sets the row height.
-    const observer = new ResizeObserver(syncMetrics);
+    // The masthead sets the row height, and it is the only thing watched for
+    // it. ytd-app used to be watched as well, which fed itself: the height this
+    // writes is what positions and sizes ytd-app, so every notification
+    // produced another one, and a resize turned into a loop the browser had to
+    // break for itself once a frame.
+    const observer = new ResizeObserver(scheduleSync);
     observer.observe(bar);
-    observer.observe(app);
 
     app.addEventListener("scroll", syncMastheadFade, { passive: true });
     window.addEventListener("yt-navigate-finish", () => {
       syncWatchPage();
       syncVideoAvailability();
-      syncGlow();
+      scheduleSync();
     });
 
     // Media events do not bubble, so these are caught on the way down. Between
@@ -617,10 +691,17 @@
       true,
     );
 
-    window.addEventListener("resize", () => {
-      syncMetrics();
-      syncMaximizeGlyph();
-    });
+    // Whether the window is maximized is a round trip to the app, and it can
+    // only have changed once the drag is over, so it is asked for then rather
+    // than on every frame of one.
+    window.addEventListener(
+      "resize",
+      () => {
+        beginResize();
+        scheduleSync();
+      },
+      { passive: true },
+    );
 
     watchYouTube();
   }
