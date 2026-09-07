@@ -58,7 +58,24 @@
   const GLYPH_RESTORE = "\uE923";
   const GLYPH_CLOSE = "\uE8BB";
 
-  // Anything in this list keeps its click instead of starting a window drag.
+  // How far the pointer has to travel from a press on one of the row's own
+  // controls before it counts as moving the window rather than clicking it.
+  // Windows uses 4px for the same decision (SM_CXDRAG).
+  const DRAG_THRESHOLD = 4;
+
+  // Text entry. A field drags the window like anything else in the row, except
+  // where the press lands on the text it holds, which belongs to the caret.
+  const TEXT_SELECTOR = ["input", "textarea", "[contenteditable='true']"].join(
+    ",",
+  );
+
+  // How far past the last glyph still counts as pressing the text. Selecting
+  // to the end of a value means aiming at the gap after it, and landing on the
+  // exact pixel the text stops at is not something anyone can do.
+  const TEXT_SLACK = 40;
+
+  // Anything in this list gets its click, and starts a window drag only once
+  // the pointer has moved past DRAG_THRESHOLD.
   const INTERACTIVE_SELECTOR = [
     "a",
     "button",
@@ -441,16 +458,65 @@
   }
 
   // Dragging
-  function isInteractive(event) {
+  function nodeInPath(event, selector) {
     // composedPath crosses shadow roots, which closest() cannot: most of
     // YouTube's masthead controls live inside custom elements.
     return event
       .composedPath()
-      .some(
-        (node) =>
-          typeof node?.matches === "function" &&
-          node.matches(INTERACTIVE_SELECTOR),
+      .find(
+        (node) => typeof node?.matches === "function" && node.matches(selector),
       );
+  }
+
+  function matchesInPath(event, selector) {
+    return Boolean(nodeInPath(event, selector));
+  }
+
+  function isInteractive(event) {
+    return (
+      matchesInPath(event, INTERACTIVE_SELECTOR) ||
+      matchesInPath(event, TEXT_SELECTOR)
+    );
+  }
+
+  // One scratch context, kept because measuring is done per press.
+  const measureContext = document.createElement("canvas").getContext("2d");
+
+  /// True when the press landed on the text a field is holding.
+  ///
+  /// The search box spans most of the row and is usually empty or nearly so.
+  /// Handing the whole of it to the caret would leave almost nothing to move
+  /// the window by, so only the glyphs themselves are treated as text: a press
+  /// past the end of the value is empty space and drags like the rest of the
+  /// row, while a press within the value starts a selection and never drags.
+  ///
+  /// The text is measured rather than asked for, because neither an input's
+  /// selection API nor caretRangeFromPoint reports a useful position for a
+  /// point past the end of the value.
+  function onFieldText(event, field) {
+    const value = field.value ?? field.textContent ?? "";
+    if (!value) return false;
+    // Without a canvas there is nothing to measure with; keep the field's text
+    // rather than risk a drag that swallows a selection.
+    if (!measureContext) return true;
+
+    const style = window.getComputedStyle(field);
+    // ponytail: assumes the value runs left to right from the field's left
+    // padding edge, which is every Latin layout YouTube serves. An RTL locale
+    // measures from the wrong side and gives the caret the wrong half.
+    if (style.direction === "rtl") return true;
+
+    measureContext.font = `${style.fontStyle} ${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+
+    const rect = field.getBoundingClientRect();
+    const textStart =
+      rect.left +
+      parseFloat(style.borderLeftWidth || "0") +
+      parseFloat(style.paddingLeft || "0") -
+      (field.scrollLeft || 0);
+
+    const textEnd = textStart + measureContext.measureText(value).width;
+    return event.clientX <= textEnd + TEXT_SLACK;
   }
 
   function withinTitleBar(event) {
@@ -462,10 +528,89 @@
     return event.clientY < titleBarHeight();
   }
 
+  /// Hold a press on one of the row's controls until it is clearly a drag.
+  ///
+  /// startDragging cannot simply be called from the press: it hands the mouse
+  /// to Windows, so the page never sees the release and the click never
+  /// happens. The press is watched instead, and the window starts moving only
+  /// once the pointer has left a small radius around it. Letting go inside that
+  /// radius takes everything back down and leaves the ordinary click untouched.
+  function armDeferredDrag(event, field) {
+    const startX = event.clientX;
+    const startY = event.clientY;
+
+    // Focus is refused up front rather than taken back afterwards. Focusing
+    // YouTube's search box opens its suggestion list, and undoing that once the
+    // drag was certain still showed the list for the frames in between. This
+    // handler captures, so the press has not been acted on yet and there is
+    // nothing to undo. It also stops the browser's own text selection, so no
+    // highlight is left behind either. A press that turns out to be a click
+    // puts both back in `onRelease`.
+    if (field) event.preventDefault();
+
+    function disarm() {
+      document.removeEventListener("mousemove", onMove, true);
+      document.removeEventListener("mouseup", onRelease, true);
+      document.removeEventListener("dragstart", onDragStart, true);
+    }
+
+    /// The press was let go without moving, so it was a click after all.
+    function onRelease() {
+      disarm();
+      if (!field) return;
+
+      // Refused above, so it is done by hand. Only a press past the end of the
+      // value reaches this function — one within the text never arms a drag —
+      // so the end is where the caret belongs.
+      field.focus?.({ preventScroll: true });
+      if (typeof field.setSelectionRange === "function") {
+        const end = field.value.length;
+        field.setSelectionRange(end, end);
+      }
+    }
+
+    function onMove(moveEvent) {
+      if (
+        Math.abs(moveEvent.clientX - startX) < DRAG_THRESHOLD &&
+        Math.abs(moveEvent.clientY - startY) < DRAG_THRESHOLD
+      ) {
+        return;
+      }
+
+      // Before the call, not after: once Windows has the mouse this page stops
+      // getting events, and these would sit on the document until the next
+      // press somewhere else.
+      disarm();
+      appWindow.startDragging().catch(() => {});
+    }
+
+    function onDragStart(dragEvent) {
+      // YouTube's logo and the thumbnails beside it are links and images, so a
+      // press that moves would otherwise start an HTML5 drag. Chromium's
+      // threshold for that is the same 4px, so which one fires first is a race;
+      // the native drag would take the mouse and leave the window behind.
+      dragEvent.preventDefault();
+    }
+
+    document.addEventListener("mousemove", onMove, true);
+    document.addEventListener("mouseup", onRelease, true);
+    document.addEventListener("dragstart", onDragStart, true);
+  }
+
   function onMouseDown(event) {
     if (event.button !== 0 || !withinTitleBar(event)) return;
-    if (isInteractive(event)) return;
 
+    const field = nodeInPath(event, TEXT_SELECTOR);
+    // A press on the text a field is holding is selecting it, not moving the
+    // window. The empty rest of the field is dragged like the rest of the row.
+    if (field && onFieldText(event, field)) return;
+
+    if (field || matchesInPath(event, INTERACTIVE_SELECTOR)) {
+      armDeferredDrag(event, field);
+      return;
+    }
+
+    // Empty space has no click to protect, so it moves the window at once.
     appWindow.startDragging().catch(() => {});
   }
 
