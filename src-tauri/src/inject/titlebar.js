@@ -551,7 +551,6 @@
     function disarm() {
       document.removeEventListener("mousemove", onMove, true);
       document.removeEventListener("mouseup", onRelease, true);
-      document.removeEventListener("dragstart", onDragStart, true);
     }
 
     /// The press was let go without moving, so it was a click after all.
@@ -584,21 +583,36 @@
       appWindow.startDragging().catch(() => {});
     }
 
-    function onDragStart(dragEvent) {
-      // YouTube's logo and the thumbnails beside it are links and images, so a
-      // press that moves would otherwise start an HTML5 drag. Chromium's
-      // threshold for that is the same 4px, so which one fires first is a race;
-      // the native drag would take the mouse and leave the window behind.
-      dragEvent.preventDefault();
-    }
-
     document.addEventListener("mousemove", onMove, true);
     document.addEventListener("mouseup", onRelease, true);
-    document.addEventListener("dragstart", onDragStart, true);
+  }
+
+  /// Refuse the browser's own drag anywhere in the title bar.
+  ///
+  /// YouTube's logo is a link, and a link that is dragged is picked up by
+  /// Chromium as a drag-and-drop payload: it takes the mouse, shows the ghost
+  /// of the link under the pointer, and leaves the window where it was.
+  ///
+  /// This cannot be armed with the press and taken down with it. Chromium
+  /// decides to start a drag while dispatching the mousemove that crosses its
+  /// threshold, which is the same movement that commits the window drag, so a
+  /// listener removed on the way into `startDragging` is already gone by the
+  /// time `dragstart` is fired. Nothing in this row is worth dragging out of,
+  /// so it is simply refused for the row's whole lifetime.
+  function onDragStart(event) {
+    if (!withinTitleBar(event)) return;
+
+    event.preventDefault();
   }
 
   function onMouseDown(event) {
     if (event.button !== 0 || !withinTitleBar(event)) return;
+
+    // The caption buttons are the one part of the row that never moves the
+    // window. Windows' own do not, and sliding off one of them is how a press
+    // on it is taken back — which would instead throw the window across the
+    // desktop.
+    if (matchesInPath(event, `#${CONTROLS_ID}`)) return;
 
     const field = nodeInPath(event, TEXT_SELECTOR);
     // A press on the text a field is holding is selecting it, not moving the
@@ -825,6 +839,7 @@
 
     document.addEventListener("mousedown", onMouseDown, true);
     document.addEventListener("dblclick", onDoubleClick, true);
+    document.addEventListener("dragstart", onDragStart, true);
 
     // The floating window is WebView2's, so it turns up on the taskbar wearing
     // the runtime's icon. Caught here rather than on the request itself so the
