@@ -235,24 +235,27 @@
       }
 
       html.${YOUTUBE_CLASS} ytd-app {
-        /* Absolute, not fixed, and the difference matters. A fixed element is
-           a stacking context, which would trap YouTube's dialogs inside this
-           one: Polymer opens a dialog in ytd-app but appends its backdrop to
-           the body, so the backdrop's z-index would be compared against this
-           element rather than against the dialog's, and the backdrop would end
-           up over the dialog. The dialog still renders, dimmed, but every
-           click lands on the backdrop instead — the share and feedback dialogs
-           went dead that way. With html and body pinned to the window and not
-           scrolling, absolute resolves against the same box fixed did. */
-        position: absolute;
-        top: var(--pake-titlebar-height, ${FALLBACK_HEIGHT}px);
-        right: 0;
-        bottom: 0;
-        left: 0;
+        /* Static, not fixed and not absolute. A fixed element is a stacking
+           context, which would trap YouTube's dialogs inside this one: Polymer
+           opens a dialog in ytd-app but appends its backdrop to the body, so
+           the backdrop's z-index would be compared against this element rather
+           than against the dialog's, and the backdrop would end up over the
+           dialog — the share and feedback dialogs went dead that way. Absolute
+           avoids that, but it makes ytd-app a positioned ancestor, which is a
+           containing block for any descendant YouTube itself positions
+           absolutely — a channel page's pinned-video card is one, and it ended
+           up measured against ytd-app's top instead of its own header, landing
+           pinned over the tabs below it. Static creates neither problem: it is
+           never a stacking context and never a containing block, so descendants
+           keep resolving against whatever ancestor they always did. The offset
+           is done with margin instead of top/left/right/bottom, which only
+           work on a positioned element. */
+        margin-top: var(--pake-titlebar-height, ${FALLBACK_HEIGHT}px);
+        width: 100% !important;
         /* YouTube sizes ytd-app to the full viewport and puts a floor under it
-           with min-height, which the bottom offset alone cannot beat: the
-           container would hang one title-bar height past the window edge,
-           cutting off the end of the page and the scrollbar's bottom arrow. */
+           with min-height, which margin-top alone cannot beat: the container
+           would hang one title-bar height past the window edge, cutting off
+           the end of the page and the scrollbar's bottom arrow. */
         height: calc(100% - var(--pake-titlebar-height, ${FALLBACK_HEIGHT}px)) !important;
         min-height: 0 !important;
         overflow-x: hidden;
@@ -757,6 +760,72 @@
     root.classList.add(GLOW_CLASS);
   }
 
+  /// Point a YouTube page header at the scroller that actually moves.
+  ///
+  /// A channel page's header (banner, avatar, tabs) is a Polymer app-header:
+  /// fixed in place, and slid up out of the way by its own scroll listener
+  /// until only the tabs are left. That listener is on the window by default,
+  /// and the window never scrolls here — ytd-app does — so the whole header
+  /// stayed pinned.
+  ///
+  /// Setting the target once is not enough: the header's layout element
+  /// writes the document back over it on every resize and every layout reset,
+  /// and YouTube triggers those constantly while a grid fills in. So the
+  /// property is shadowed on the instance, and a write of the document is
+  /// turned into a write of ytd-app on its way into Polymer's own setter. The
+  /// observer that moves the scroll listener then runs exactly as it always
+  /// did, just with the right element.
+  function redirectHeaderScrollTarget(header, app) {
+    if (header.__pakeScroller) return;
+
+    let descriptor = null;
+    for (
+      let proto = Object.getPrototypeOf(header);
+      proto && !descriptor;
+      proto = Object.getPrototypeOf(proto)
+    ) {
+      descriptor = Object.getOwnPropertyDescriptor(proto, "scrollTarget");
+    }
+    // Not upgraded yet: there is no setter to go through. A later pass picks
+    // it up once Polymer has defined the property.
+    if (!descriptor?.set) return;
+
+    Object.defineProperty(header, "scrollTarget", {
+      configurable: true,
+      get() {
+        return descriptor.get.call(this);
+      },
+      set(value) {
+        descriptor.set.call(
+          this,
+          value === document.documentElement ? app : value,
+        );
+      },
+    });
+    header.__pakeScroller = true;
+    header.scrollTarget = app;
+  }
+
+  function syncHeaderScrollTarget() {
+    const app = document.querySelector("ytd-app");
+    if (!app) return;
+
+    for (const header of document.querySelectorAll("tp-yt-app-header")) {
+      redirectHeaderScrollTarget(header, app);
+    }
+  }
+
+  /// A header announces itself when it attaches, before its layout has had a
+  /// frame to point it at the document. Caught in the capture phase, since the
+  /// layout stops the event on its way up.
+  function onHeaderAttached(event) {
+    const header = event.target;
+    if (!header?.matches?.("tp-yt-app-header")) return;
+
+    const app = document.querySelector("ytd-app");
+    if (app) redirectHeaderScrollTarget(header, app);
+  }
+
   function syncWatchPage() {
     const watching = window.location.pathname === "/watch";
     document.documentElement.classList.toggle(WATCH_CLASS, watching);
@@ -805,6 +874,7 @@
     playerObserver = new ResizeObserver(scheduleSync);
 
     syncWatchPage();
+    syncHeaderScrollTarget();
     syncMetrics();
 
     // The masthead sets the row height, and it is the only thing watched for
@@ -816,8 +886,10 @@
     observer.observe(bar);
 
     app.addEventListener("scroll", syncMastheadFade, { passive: true });
+    document.addEventListener("app-reset-layout", onHeaderAttached, true);
     window.addEventListener("yt-navigate-finish", () => {
       syncWatchPage();
+      syncHeaderScrollTarget();
       syncVideoAvailability();
       scheduleSync();
     });

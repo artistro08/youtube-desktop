@@ -93,10 +93,14 @@ gh release create vX.Y.Z <msi> <latest.json> --repo artistro08/youtube-desktop
 the private key means no further updates can be signed, and every installed copy
 stops updating.
 
-**`position: fixed` on `ytd-app` breaks YouTube's dialogs.** It makes a
-stacking context, which traps dialogs under the backdrop Polymer appends to
-`body`; they render, dimmed, and swallow every click. It is `absolute` for that
-reason — see the comment in `titlebar.js`.
+**`position: fixed` on `ytd-app` breaks YouTube's dialogs, and `absolute`
+breaks channel pages.** Fixed makes a stacking context, which traps dialogs
+under the backdrop Polymer appends to `body`; they render, dimmed, and swallow
+every click. Absolute avoids that but makes ytd-app a containing block for
+YouTube's own absolutely-positioned descendants — a channel page's pinned-video
+card lands measured against ytd-app's top instead of its own header, pinned
+over the tabs. It is `static`, offset with `margin-top`, for that reason — see
+the comment in `titlebar.js`.
 
 **Settings live in two halves.** A field means: the struct and its `serde`
 default in `settings.rs`, the accessor, and a row in the dialog in
