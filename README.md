@@ -3,7 +3,7 @@
 A YouTube desktop app for Windows: YouTube in its own window, with a title bar
 that is part of the page, picture-in-picture wired to the window buttons, and
 the Windows media controls, notifications and links an installed app is
-expected to have.
+expected to have. In my effort to help me separate one of the main apps I use, I decided to create this. It solves a problem for me, and if anyone else wants to use it, I hope it solves the problem for you.
 
 Built on [Pake](https://github.com/tw93/Pake), which packages a website into a
 Tauri window. This fork replaces the generic wrapper with YouTube-specific
@@ -14,47 +14,22 @@ behaviour.
 Download the `.msi` from [Releases](../../releases) and run it. Windows 11
 already ships the WebView2 runtime the app renders with.
 
-## What it does
+## What it does / features
 
-### Window
+### Integrated Window Title Bar
 
-The title bar **is** YouTube's masthead. The minimize, maximize and close
-buttons sit at the right end of that same row, drawn the way Windows draws
-them, and the empty space between the search box and the avatar drags the
-window.
+The search bar, navigation, logo, etc., is all part of the title bar. You can grab and move any part of it when you want to drag the window.
 
-On a watch page the bar starts clear, so the player's ambient glow reaches the
-top of the window, and fades to solid over 300ms once the page scrolls.
+### Auto Picture-in-picture
 
-Scrollbars are Chromium's overlay style: a thin line when idle that widens
-under the pointer, with the page running to the window edge.
+When you minimize the app, a picture‑in‑picture window will pop up. This will also happen when you close it to the tray. Shorts don’t do this by default, since it changes the height of the picture‑in‑picture, but you can enable it in Settings.
 
-### Picture-in-picture
-
-The video pops out into a floating window when you minimize, when you close to
-the tray, from the tray menu, and from the video's own right-click menu.
-Bringing the window back takes the video out of the floating window again.
-
-Every route to a hidden window behaves the same — the title bar's buttons, the
-taskbar, <kbd>Alt</kbd>+<kbd>F4</kbd>, and the tray — because the app watches
-the window rather than its own buttons.
-
-Shorts stay put unless you ask for them, and a playing Short is paused when the
-window is hidden. A full video keeps playing, which is the point of an app that
-lives in the tray.
-
-### Windows integration
+### Other features
 
 - **Tray icon** with Show/Hide, picture-in-picture for the current video, and a
-  switch to remove the icon. The in-app settings dialog is the way back.
-- **Media controls.** The volume flyout and the keyboard's media keys show the
-  app by name, with the video's title and thumbnail.
-- **Notifications.** YouTube's own notifications arrive as native toasts;
-  clicking one opens that video in the app.
-- **Deep links.** `youtube://` opens in the app. Links that leave YouTube open
-  in your default browser.
-- <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd> copies the current video's
-  canonical URL, with the snackbar YouTube shows when it saves something.
+  switch to remove the icon. You can re‑enable the tray icon by going into the App Settings under your avatar.
+- **Deep links.** `youtube://` opens in the app. You can add redirects to your browser to open these links in the app.
+- <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd> copies the current page's URL
 
 ### Settings
 
@@ -69,37 +44,17 @@ Under the avatar menu, below YouTube's own Settings:
 | Picture-in-picture on close | On | Closing to the tray does the same. |
 | Include Shorts | Off | Lets Shorts pop out too. |
 
-Stored in `%APPDATA%\com.artistro08.youtube\settings.json`. Every field has a
-default, so a file written by an older build keeps working.
-
 ## Memory
 
-The window is one site, so most of what Chromium spends memory on to keep a
-browser fast across many tabs is waste here. The app asks for a single
-renderer, folds same-site frames together, and turns off the back/forward
-cache, which otherwise keeps whole rendered pages alive after navigating away.
-
-Measured on the same watch page, whole process tree:
-
-| | Processes | Private | Working set |
-| --- | --- | --- | --- |
-| v0.1.0 | 9 | 658 MB | 1032 MB |
-| v0.1.1 | 8 | 605 MB | 920 MB |
-
-Private bytes is the honest figure; working set double counts pages shared
-between the WebView2 processes. What remains is a renderer and a GPU process
-holding a decoded video, which is the floor for playing YouTube at all.
-
-Two levers are deliberately left alone. Site isolation would collapse more
-processes, but it is the boundary between the page and the ad frames it
-embeds, and that is not a memory decision. Chromium's low-end device mode
-saves around 50MB more, but it makes the browser report the machine as
-memory-constrained and YouTube reads that: the watch page loses its pill-shaped
-action buttons and their frosted backgrounds.
+Since we're using a native WebView, we can leverage the built-in memory optimizations and keep the app's memory usage as low as possible.
 
 ## Building
 
 Needs [Rust](https://rustup.rs), Node 20+, and the MSVC build tools.
+
+
+## Contributing
+If you would like to contribute and add any new features, feel free to do so.
 
 ```bash
 npm install
