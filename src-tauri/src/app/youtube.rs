@@ -202,78 +202,91 @@ pub struct IncomingNotification {
     pub url: String,
 }
 
-/// Show a native notification whose click brings the app forward on the
-/// notified page.
+/// The link a toast click opens: the notified page on the `youtube://` scheme
+/// this app owns, or the bare scheme (the home page) when there is no page.
+///
+/// A scheme link rather than an in-process callback because the callback dies
+/// with the process. Toasts outlive the app in the notification centre, and a
+/// click there has to open the page whether the app is still running or not.
+/// Windows launches the scheme's handler, which is this app, and the launch
+/// path already knows how to hand a link to a running instance or start on it.
+fn toast_launch_url(url: &str) -> String {
+    match url.split_once("://") {
+        Some((_, rest)) if !rest.is_empty() => format!("{DEEP_LINK_SCHEME}://{rest}"),
+        _ => format!("{DEEP_LINK_SCHEME}://"),
+    }
+}
+
+/// Text made safe to sit inside toast XML, in an attribute or an element.
+fn escape_xml(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
+/// Show a native notification whose click opens the app on the notified page.
 ///
 /// The Windows toast is built directly instead of going through the
-/// notification plugin because only the raw toast exposes an activation
-/// callback, and "notifications open in the app" is the whole point here.
+/// notification plugin because only the raw toast XML can carry the launch
+/// link, and "notifications open in the app" is the whole point here.
 #[cfg(target_os = "windows")]
 pub fn show_notification(
     app: &AppHandle,
     notification: IncomingNotification,
 ) -> Result<(), String> {
-    use tauri_winrt_notification::Toast;
+    use windows::{
+        core::HSTRING,
+        Data::Xml::Dom::XmlDocument,
+        UI::Notifications::{ToastNotification, ToastNotificationManager},
+    };
 
     let icon = app
         .path()
         .resolve("png/youtube_512.png", tauri::path::BaseDirectory::Resource)
         .ok()
-        .filter(|path| path.exists());
-
-    let app_id = app.config().identifier.clone();
-    if let Err(error) = show_toast(app, &app_id, &notification, icon.as_deref()) {
-        // Windows only accepts an app id that some installed shortcut owns. A
-        // build run straight from `cargo` has none, so fall back to the app id
-        // PowerShell registers on every machine instead of dropping the
-        // notification entirely.
-        eprintln!("[Pake] Toast for app id '{app_id}' failed ({error}); retrying unpackaged.");
-        return show_toast(
-            app,
-            Toast::POWERSHELL_APP_ID,
-            &notification,
-            icon.as_deref(),
-        )
-        .map_err(|error| format!("Failed to show notification: {error}"));
-    }
-
-    Ok(())
-}
-
-#[cfg(target_os = "windows")]
-fn show_toast(
-    app: &AppHandle,
-    app_id: &str,
-    notification: &IncomingNotification,
-    icon: Option<&std::path::Path>,
-) -> tauri_winrt_notification::Result<()> {
-    use tauri_winrt_notification::{Duration, IconCrop, Toast};
-
-    let handle = app.clone();
-    let target_url = notification.url.clone();
-
-    let mut toast = Toast::new(app_id)
-        .title(&notification.title)
-        .text1(&notification.body)
-        .duration(Duration::Short);
-
-    if let Some(icon) = icon {
-        toast = toast.icon(icon, IconCrop::Square, "YouTube");
-    }
-
-    toast
-        .on_activated(move |_action| {
-            if target_url.is_empty() {
-                crate::app::window::show_all_app_windows(&handle, false);
-            } else {
-                navigate_main_window(&handle, &target_url);
-            }
-            Ok(())
+        .filter(|path| path.exists())
+        .map(|path| {
+            format!(
+                r#"<image placement="appLogoOverride" src="file:///{}" alt="YouTube"/>"#,
+                escape_xml(&path.display().to_string())
+            )
         })
-        .show()
+        .unwrap_or_default();
+
+    let xml = format!(
+        r#"<toast duration="short" activationType="protocol" launch="{}">
+            <visual>
+                <binding template="ToastGeneric">
+                    {icon}
+                    <text>{}</text>
+                    <text>{}</text>
+                </binding>
+            </visual>
+        </toast>"#,
+        escape_xml(&toast_launch_url(&notification.url)),
+        escape_xml(&notification.title),
+        escape_xml(&notification.body),
+    );
+
+    let describe = |error: windows::core::Error| format!("Failed to show notification: {error}");
+
+    let document = XmlDocument::new().map_err(describe)?;
+    document.LoadXml(&HSTRING::from(xml)).map_err(describe)?;
+    let toast = ToastNotification::CreateToastNotification(&document).map_err(describe)?;
+
+    // The app id must be one an installed Start Menu shortcut carries, or
+    // Windows drops the toast without a word. The installer writes that
+    // shortcut; a build run straight from `cargo` has none and notifies nobody.
+    let app_id = HSTRING::from(app.config().identifier.as_str());
+    ToastNotificationManager::CreateToastNotifierWithId(&app_id)
+        .map_err(describe)?
+        .Show(&toast)
+        .map_err(describe)
 }
 
-/// Non-Windows fallback: the notification plugin has no activation callback,
+/// Non-Windows fallback: the notification plugin cannot carry a launch link,
 /// so the click cannot be routed. The toast itself still works.
 #[cfg(not(target_os = "windows"))]
 pub fn show_notification(
@@ -388,6 +401,30 @@ mod tests {
         ] {
             assert!(is_resumable_url(url), "{url} should be resumable");
         }
+    }
+
+    /// A toast click launches the page on the app's own scheme, so the link
+    /// must round-trip through `normalize_incoming_url` back to the same page.
+    #[test]
+    fn toast_launch_links_round_trip_through_the_scheme() {
+        let page = "https://www.youtube.com/watch?v=abc&lc=Ugw123";
+        let launch = toast_launch_url(page);
+        assert_eq!(launch, "youtube://www.youtube.com/watch?v=abc&lc=Ugw123");
+        assert_eq!(normalize_incoming_url(&launch).unwrap(), page);
+
+        // No page: the bare scheme opens the app on the home page.
+        assert_eq!(
+            normalize_incoming_url(&toast_launch_url("")).unwrap(),
+            HOME_URL
+        );
+    }
+
+    #[test]
+    fn xml_escaping_covers_every_special_character() {
+        assert_eq!(
+            escape_xml(r#"a&b<c>d"e'f"#),
+            "a&amp;b&lt;c&gt;d&quot;e&apos;f"
+        );
     }
 
     #[test]

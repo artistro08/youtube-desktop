@@ -4,8 +4,9 @@
 // system WebView has no push service for, so the site's own notifications never
 // reach a packaged app. Instead we poll the same InnerTube endpoints the bell
 // icon uses (with the page's own session), diff against what has already been
-// announced, and hand each new item to the native notifier. Clicking the toast
-// is handled in Rust: it shows the window and navigates it to the item's URL.
+// announced, and hand each new item to the native notifier. The toast carries
+// the item's URL on the app's own youtube:// scheme, so clicking it opens the
+// page here whether the app is still running or was closed in the meantime.
 
 (function () {
   const invoke = window.__TAURI__?.core?.invoke;
@@ -141,9 +142,17 @@
       .map((item) => item?.notificationRenderer)
       .filter(Boolean)
       .map((renderer) => {
+        // Comment notifications (replies, hearts) carry no web URL, only the
+        // ids YouTube's own inbox uses to open the comment. The watch page
+        // accepts the same pair as `v` and `lc`, so build that link instead
+        // of leaving the toast with nowhere to go.
+        const comment = renderer.navigationEndpoint?.getCommentsFromInboxCommand;
         const path =
           renderer.navigationEndpoint?.commandMetadata?.webCommandMetadata
-            ?.url || "";
+            ?.url ||
+          (comment?.videoId
+            ? `/watch?v=${encodeURIComponent(comment.videoId)}&lc=${encodeURIComponent(comment.linkedCommentId || "")}`
+            : "");
         return {
           id:
             renderer.notificationId ||
@@ -162,12 +171,10 @@
   async function pollNotifications() {
     if (readConfig("LOGGED_IN") === false) return;
 
-    const unseen = await callInnerTube("notification/get_unseen_count", {});
-    const unseenCount = Number(unseen?.unseenCount ?? 0);
-    // Nothing new upstream: skip the heavier menu request, but still run the
-    // first pass so the seen set is seeded before the first real notification.
-    if (!seedingRun && unseenCount <= 0) return;
-
+    // The inbox is fetched outright on every poll. It used to be gated on
+    // `notification/get_unseen_count`, but that endpoint no longer reports a
+    // top-level `unseenCount`, so the gate read 0 forever and nothing past the
+    // seeding pass ever ran. Once a minute, the menu request is cheap enough.
     const menu = await callInnerTube("notification/get_notification_menu", {
       notificationsMenuRequestType: "NOTIFICATIONS_MENU_REQUEST_TYPE_INBOX",
     });

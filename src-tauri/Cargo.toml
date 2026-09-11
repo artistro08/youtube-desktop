@@ -1,6 +1,6 @@
 [package]
 name = "youtube"
-version = "0.1.7"
+version = "0.1.8"
 description = "YouTube desktop app for Windows."
 authors = ["artistro08"]
 license = "GPL-3.0-or-later"
@@ -65,20 +65,21 @@ windows-sys = { version = "0.61.2", features = [
 ] }
 # Used for native WebView2 GoBack/GoForward on error pages (no page JS).
 webview2-com = "0.38"
-# Toasts are built directly rather than through tauri-plugin-notification
-# because only the raw toast exposes an activation callback, which is what
-# makes a YouTube notification open its video in the app.
-tauri-winrt-notification = "0.7"
 # URL-handler registration (youtube:// scheme, http(s) capabilities).
 winreg = "0.56"
 # System Media Transport Controls: the app publishes its own media session so
 # the Windows media flyout can name and illustrate it. `Win32_System_Com` is
 # also what reaches the shell's virtual desktop services, so the floating
 # picture-in-picture window can follow the user between desktops.
+# `UI_Notifications` and `Data_Xml_Dom` build the YouTube notification toasts
+# directly rather than through tauri-plugin-notification, because only the raw
+# toast XML can carry the `youtube://` link a click opens.
 windows = { version = "0.61", features = [
+  "Data_Xml_Dom",
   "Foundation",
   "Media",
   "Storage_Streams",
+  "UI_Notifications",
   "Win32_Foundation",
   "Win32_System_Com",
   "Win32_System_WinRT",
